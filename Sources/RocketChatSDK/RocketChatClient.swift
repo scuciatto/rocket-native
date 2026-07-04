@@ -210,7 +210,7 @@ public final class RocketChatClient: Sendable {
     /// poll loop. Call `close()` on the handle when done.
     public func openThread(_ threadId: String, in roomId: String) async throws -> ThreadHandle {
         try await engine.openThread(threadId)
-        return ThreadHandle(threadId: threadId, roomId: roomId, engine: engine)
+        return ThreadHandle(threadId: threadId, roomId: roomId, engine: engine, client: self)
     }
 
     /// Follow/unfollow a thread (its parent message id).

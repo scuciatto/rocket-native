@@ -40,6 +40,25 @@ public final class RoomHandle: Sendable {
         try await client.markRead(roomId: roomId)
     }
 
+    /// Toggles (or forces, via `on`) a reaction, then catches up immediately
+    /// so the change is visible without waiting for the next poll tick.
+    public func react(messageId: String, emoji: String, on: Bool? = nil) async throws {
+        try await client.react(messageId: messageId, emoji: emoji, on: on)
+        await engine.tickRoom(roomId)
+    }
+
+    /// Edits a message and catches up immediately.
+    public func edit(messageId: String, text: String) async throws {
+        _ = try await client.edit(messageId: messageId, roomId: roomId, text: text)
+        await engine.tickRoom(roomId)
+    }
+
+    /// Deletes a message and catches up immediately.
+    public func delete(messageId: String) async throws {
+        try await client.delete(messageId: messageId, roomId: roomId)
+        await engine.tickRoom(roomId)
+    }
+
     public func close() async {
         await engine.closeRoom(roomId)
     }
