@@ -5,6 +5,9 @@ import Foundation
 /// and returns a canned response.
 final class MockHTTPTransport: HTTPTransport, @unchecked Sendable {
     struct Step {
+        /// When set, this step only serves requests whose path ends with it —
+        /// needed because some SDK calls fan out concurrent requests.
+        let pathSuffix: String?
         let handler: @Sendable (URLRequest) throws -> (Data, HTTPURLResponse)
     }
 
@@ -13,25 +16,33 @@ final class MockHTTPTransport: HTTPTransport, @unchecked Sendable {
     private(set) var requests: [URLRequest] = []
 
     func expect(
+        path: String? = nil,
         _ handler: @escaping @Sendable (URLRequest) throws -> (Data, HTTPURLResponse)
     ) {
         lock.lock()
         defer { lock.unlock() }
-        steps.append(Step(handler: handler))
+        steps.append(Step(pathSuffix: path, handler: handler))
     }
 
     /// Queue a plain JSON response with optional status/headers.
-    func respond(status: Int = 200, json: String, headers: [String: String] = [:]) {
-        expect { request in
+    func respond(
+        path: String? = nil, status: Int = 200, json: String,
+        headers: [String: String] = [:]
+    ) {
+        expect(path: path) { request in
             (Data(json.utf8), MockHTTPTransport.httpResponse(
                 url: request.url!, status: status, headers: headers))
         }
     }
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let requestPath = request.url?.path() ?? ""
         let step: Step? = lock.withLock {
             requests.append(request)
-            return steps.isEmpty ? nil : steps.removeFirst()
+            let index = steps.firstIndex {
+                $0.pathSuffix.map(requestPath.hasSuffix) ?? true
+            }
+            return index.map { steps.remove(at: $0) }
         }
         guard let step else {
             fatalError("MockHTTPTransport: unexpected request to \(request.url?.absoluteString ?? "?")")

@@ -82,6 +82,75 @@ public final class RocketChatClient: Sendable {
         await auth.set(nil)
     }
 
+    // MARK: - Rooms
+
+    /// Fetches all joined rooms with their per-user state, joined into
+    /// sidebar-ready summaries, sorted by most recent activity.
+    public func rooms() async throws -> [RoomSummary] {
+        async let roomsDelta = rest.send(API.Rooms.get())
+        async let subscriptionsDelta = rest.send(API.Subscriptions.get())
+        let roomsById = Dictionary(
+            uniqueKeysWithValues: try await roomsDelta.update.map { ($0._id, $0) })
+        return try await subscriptionsDelta.update
+            .map { RoomSummary(room: roomsById[$0.rid], subscription: $0) }
+            .sorted { ($0.lastActivity ?? .distantPast) > ($1.lastActivity ?? .distantPast) }
+    }
+
+    public func markRead(roomId: String) async throws {
+        _ = try await rest.send(API.Subscriptions.read(roomId: roomId))
+    }
+
+    // MARK: - Messages
+
+    /// Latest messages in a room, newest first, offset-paged.
+    public func history(
+        roomId: String, type: RoomType, count: Int = 50, offset: Int = 0
+    ) async throws -> [Message] {
+        try await rest.send(
+            API.roomMessages(roomId: roomId, type: type, count: count, offset: offset)
+        ).messages
+    }
+
+    /// Everything that changed in a room since `lastUpdate` — new messages,
+    /// edits, and deletions.
+    public func syncMessages(roomId: String, since: Date) async throws -> MessageDelta {
+        let response = try await rest.send(
+            API.Chat.syncMessages(roomId: roomId, lastUpdate: since))
+        return MessageDelta(
+            updated: response.result.updated,
+            deleted: response.result.deleted ?? [])
+    }
+
+    /// Sends a message. The id is client-generated (pass `messageId` to supply
+    /// your own, e.g. for optimistic UI); the server honors it, so a later
+    /// delta upserts rather than duplicates.
+    @discardableResult
+    public func send(
+        text: String, roomId: String,
+        threadId: String? = nil, messageId: String? = nil
+    ) async throws -> Message {
+        try await rest.send(API.Chat.sendMessage(
+            roomId: roomId, text: text,
+            messageId: messageId ?? MessageID.generate(), threadId: threadId)
+        ).message
+    }
+
+    @discardableResult
+    public func edit(messageId: String, roomId: String, text: String) async throws -> Message {
+        try await rest.send(API.Chat.update(
+            roomId: roomId, messageId: messageId, text: text)
+        ).message
+    }
+
+    public func delete(messageId: String, roomId: String) async throws {
+        _ = try await rest.send(API.Chat.delete(roomId: roomId, messageId: messageId))
+    }
+
+    public func react(messageId: String, emoji: String, on: Bool? = nil) async throws {
+        _ = try await rest.send(API.Chat.react(
+            messageId: messageId, emoji: emoji, shouldReact: on))
+    }
+
     private func adoptSession(from response: LoginResponse) async -> UserProfile {
         let credentials = AuthCredentials(
             authToken: response.data.authToken,

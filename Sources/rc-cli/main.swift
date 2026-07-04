@@ -136,6 +136,81 @@ func runMe() async {
     }
 }
 
+func resolveRoom(_ client: RocketChatClient, _ nameOrId: String) async -> RoomSummary {
+    do {
+        let rooms = try await client.rooms()
+        if let match = rooms.first(where: {
+            $0.id == nameOrId || $0.displayName.lowercased() == nameOrId.lowercased()
+        }) {
+            return match
+        }
+        fail("no joined room named '\(nameOrId)'")
+    } catch {
+        fail(describe(error))
+    }
+}
+
+func timestamp(_ date: Date?) -> String {
+    guard let date else { return "----------------" }
+    return date.formatted(.iso8601.year().month().day()
+        .dateTimeSeparator(.space).time(includingFractionalSeconds: false))
+}
+
+func printMessage(_ message: Message) {
+    let author = message.u.username ?? message.u._id
+    if let system = message.t {
+        print("\(timestamp(message.ts))  -- [\(system)] \(author) \(message.msg)")
+    } else {
+        let thread = message.tmid.map { " (thread \($0))" } ?? ""
+        print("\(timestamp(message.ts))  <\(author)>\(thread) \(message.msg)")
+    }
+}
+
+func runRooms() async {
+    let (client, _) = await authenticatedClient()
+    do {
+        let rooms = try await client.rooms()
+        let typeLabel: [RoomType: String] = [
+            .channel: "#", .privateGroup: "🔒", .directMessage: "@", .livechat: "L",
+        ]
+        for room in rooms where room.open {
+            let badge = room.unread > 0 ? " [\(room.unread)]" : ""
+            let mentions = room.mentions > 0 ? " @\(room.mentions)" : ""
+            let last = room.lastMessage.map {
+                " — \($0.u.username ?? "?"): \($0.msg.prefix(48))"
+            } ?? ""
+            print("\(typeLabel[room.type] ?? "?") \(room.displayName)\(badge)\(mentions)\(last)")
+        }
+    } catch {
+        fail(describe(error))
+    }
+}
+
+func runHistory(room nameOrId: String, count: Int) async {
+    let (client, _) = await authenticatedClient()
+    let room = await resolveRoom(client, nameOrId)
+    do {
+        let messages = try await client.history(
+            roomId: room.id, type: room.type, count: count)
+        for message in messages.reversed() {
+            printMessage(message)
+        }
+    } catch {
+        fail(describe(error))
+    }
+}
+
+func runSend(room nameOrId: String, text: String) async {
+    let (client, _) = await authenticatedClient()
+    let room = await resolveRoom(client, nameOrId)
+    do {
+        let sent = try await client.send(text: text, roomId: room.id)
+        print("sent \(sent._id) to \(room.displayName)")
+    } catch {
+        fail(describe(error))
+    }
+}
+
 func runLogout() async {
     let (client, _) = await authenticatedClient()
     try? await client.logout()
@@ -157,6 +232,14 @@ case "me":
     await runMe()
 case "logout":
     await runLogout()
+case "rooms":
+    await runRooms()
+case "history":
+    guard arguments.count >= 2 else { fail("usage: rc-cli history <room> [count]") }
+    await runHistory(room: arguments[1], count: arguments.count > 2 ? Int(arguments[2]) ?? 20 : 20)
+case "send":
+    guard arguments.count >= 3 else { fail("usage: rc-cli send <room> <text...>") }
+    await runSend(room: arguments[1], text: arguments.dropFirst(2).joined(separator: " "))
 default:
     print("""
     rc-cli — Rocket.Chat SDK smoke tool
@@ -164,9 +247,12 @@ default:
     Usage:
       rc-cli login <server-url> <username>   Log in (supports 2FA)
       rc-cli me                              Show the authenticated user
+      rc-cli rooms                           List joined rooms with unread state
+      rc-cli history <room> [count]          Show recent messages (default 20)
+      rc-cli send <room> <text...>           Send a message
       rc-cli logout                          Invalidate and forget the session
 
-    Coming as SDK phases land: rooms, history, send, tail, search, spotlight
+    Coming as SDK phases land: tail, search, spotlight
     """)
     exit(arguments.isEmpty ? 0 : 1)
 }
