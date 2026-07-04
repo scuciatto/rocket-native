@@ -42,7 +42,9 @@ public final class RocketChatClient: Sendable {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)
             let file = Self.cacheFileURL(directory: directory, serverURL: serverURL)
-            let path = file.path()
+            // percentEncoded: false — SQLite gets a filesystem path, and
+            // "Application Support" must not become "Application%20Support".
+            let path = file.path(percentEncoded: false)
             self.init(
                 serverURL: serverURL, transport: transport, clock: SystemClock(),
                 cacheFileURL: file,

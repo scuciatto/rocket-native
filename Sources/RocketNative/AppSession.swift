@@ -130,7 +130,7 @@ final class AppSession {
         if let cacheFile {
             for suffix in ["", "-wal", "-shm"] {
                 try? FileManager.default.removeItem(
-                    at: URL(filePath: cacheFile.path() + suffix))
+                    at: URL(filePath: cacheFile.path(percentEncoded: false) + suffix))
             }
         }
     }

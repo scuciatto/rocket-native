@@ -148,6 +148,29 @@ private func msg(
     }
 }
 
+@Suite struct SQLiteCacheSetupTests {
+    /// Regression: URL.path() percent-encodes by default, which turned
+    /// "Application Support" into "Application%20Support" and made SQLite
+    /// fail with "unable to open database file".
+    @Test func clientOpensCacheInDirectoryWithSpaces() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "rc sdk cache \(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let client = try RocketChatClient(
+            serverURL: URL(string: "https://chat.example.com")!,
+            cache: .sqlite(directory: directory),
+            transport: MockHTTPTransport())
+
+        // A write through a store proves the database really opened.
+        await client.engine.messageStore.apply(
+            delta: MessageDelta(updated: [msg("a", ts: 1)], deleted: []), in: "r1")
+        #expect(await client.engine.messageStore.count("r1") == 1)
+        #expect(FileManager.default.fileExists(
+            atPath: client.cacheFileURL!.path(percentEncoded: false)))
+    }
+}
+
 @Suite struct SQLiteSyncMarkTests {
     @Test func marksPersistAcrossInstances() async throws {
         let path = tempDatabasePath()
