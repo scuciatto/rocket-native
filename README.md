@@ -28,6 +28,15 @@ seconds instead of instant, and there are no typing indicators (streamer-only
 feature today). The sync engine is a seam — a push transport can replace
 polling later without changing the SDK's public API.
 
+**Offline cache.** Stores are backed by SQLite (system `libsqlite3`, still
+zero third-party dependencies) when the client is created with
+`cache: .sqlite(directory:)` — one database per server host. Rooms, messages,
+and delta-sync high-water marks persist, so a cold launch renders cached
+history instantly and the first sync is a delta rather than a full re-sync.
+The app enables this automatically (Application Support/RocketNative/,
+removed on logout); `.inMemory` remains the SDK default. `rc-cli` opts in via
+`RC_CACHE_DIR=<dir>`.
+
 ## SDK usage
 
 ```swift

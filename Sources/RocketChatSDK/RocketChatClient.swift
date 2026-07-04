@@ -5,8 +5,20 @@ import Foundation
 /// Instance-based by design: create one client per server/workspace.
 /// The SDK is REST-only — live updates are delivered by an adaptive
 /// delta-sync poller, not the deprecated realtime (DDP) API.
+/// Where the SDK keeps rooms, messages, and sync marks.
+public enum CacheStorage: Sendable {
+    /// No persistence; everything re-syncs on launch (v1 default).
+    case inMemory
+    /// SQLite files in `directory` (one set per server host): offline
+    /// history, instant cold launch, and delta re-sync across launches.
+    case sqlite(directory: URL)
+}
+
 public final class RocketChatClient: Sendable {
     public let serverURL: URL
+    /// The SQLite cache file backing this client, when one is in use.
+    /// Siblings `<file>-wal` / `<file>-shm` belong to it too.
+    public let cacheFileURL: URL?
     let rest: RESTClient
     let auth: AuthSession
     let engine: SyncEngine
@@ -17,18 +29,56 @@ public final class RocketChatClient: Sendable {
         self.init(serverURL: serverURL, transport: transport, clock: SystemClock())
     }
 
+    /// Creates a client with the given cache backing. Throws only for
+    /// `.sqlite` when the database cannot be created/opened.
+    public convenience init(
+        serverURL: URL, cache: CacheStorage,
+        transport: HTTPTransport = URLSessionTransport()
+    ) throws {
+        switch cache {
+        case .inMemory:
+            self.init(serverURL: serverURL, transport: transport, clock: SystemClock())
+        case .sqlite(let directory):
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true)
+            let file = Self.cacheFileURL(directory: directory, serverURL: serverURL)
+            // percentEncoded: false — SQLite gets a filesystem path, and
+            // "Application Support" must not become "Application%20Support".
+            let path = file.path(percentEncoded: false)
+            self.init(
+                serverURL: serverURL, transport: transport, clock: SystemClock(),
+                cacheFileURL: file,
+                roomStore: try SQLiteRoomStore(path: path),
+                messageStore: try SQLiteMessageStore(path: path),
+                markStore: try SQLiteSyncMarkStore(path: path))
+        }
+    }
+
+    /// Conventional cache file location for a server, so callers can remove
+    /// the cache (plus `-wal`/`-shm` siblings) on logout.
+    public static func cacheFileURL(directory: URL, serverURL: URL) -> URL {
+        let host = serverURL.host() ?? "server"
+        return directory.appending(path: "\(host).sqlite")
+    }
+
     init(
         serverURL: URL, transport: HTTPTransport, clock: RESTClock,
-        syncConfig: SyncEngine.Config = SyncEngine.Config()
+        syncConfig: SyncEngine.Config = SyncEngine.Config(),
+        cacheFileURL: URL? = nil,
+        roomStore: RoomStoring = InMemoryRoomStore(),
+        messageStore: MessageStoring = InMemoryMessageStore(),
+        markStore: SyncMarkStoring = InMemorySyncMarkStore()
     ) {
         self.serverURL = serverURL
+        self.cacheFileURL = cacheFileURL
         let auth = AuthSession()
         self.auth = auth
         let rest = RESTClient(
             serverURL: serverURL, transport: transport, auth: auth, clock: clock)
         self.rest = rest
         self.engine = SyncEngine(
-            rest: rest, auth: auth, clock: clock, config: syncConfig)
+            rest: rest, auth: auth, clock: clock, config: syncConfig,
+            roomStore: roomStore, messageStore: messageStore, markStore: markStore)
     }
 
     // MARK: - Live sync

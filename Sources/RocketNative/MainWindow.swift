@@ -28,6 +28,12 @@ struct MainWindow: View {
             await model.observe(client)
         }
         .toolbar {
+            if session.cacheUnavailable {
+                Label("No offline cache", systemImage: "externaldrive.badge.exclamationmark")
+                    .foregroundStyle(.orange)
+                    .help("The local message cache could not be opened; "
+                        + "this session won't persist history between launches.")
+            }
             SyncStateBadge(state: model.syncState)
             Button {
                 showGlobalSearch = true

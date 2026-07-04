@@ -17,6 +17,9 @@ final class AppSession {
     private(set) var client: RocketChatClient?
     private(set) var profile: UserProfile?
     private(set) var credentials: AuthCredentials?
+    /// True when the SQLite cache could not be opened and the session is
+    /// running in-memory — surfaced in the UI instead of failing silently.
+    private(set) var cacheUnavailable = false
     var loginError: String?
 
     /// Last used server, prefilled on the login form.
@@ -31,13 +34,34 @@ final class AppSession {
             ?? "https://open.rocket.chat"
     }
 
+    /// Per-host SQLite caches live in Application Support.
+    private static var cacheDirectory: URL {
+        (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory)
+            .appending(path: "RocketNative")
+    }
+
+    /// SQLite-cached client; falls back to in-memory (with a visible warning)
+    /// if the database can't open.
+    private func makeClient(server: URL) -> RocketChatClient {
+        do {
+            let client = try RocketChatClient(
+                serverURL: server, cache: .sqlite(directory: Self.cacheDirectory))
+            cacheUnavailable = false
+            return client
+        } catch {
+            cacheUnavailable = true
+            return RocketChatClient(serverURL: server)
+        }
+    }
+
     /// Tries to resume a stored session on launch.
     func resumeIfPossible() async {
         guard case .loggedOut = phase,
               let url = URL(string: serverURLString),
               let credentials = KeychainStore.load(server: url) else { return }
         phase = .loggingIn
-        let client = RocketChatClient(serverURL: url)
+        let client = makeClient(server: url)
         do {
             let profile = try await client.resume(credentials: credentials)
             await activate(client, profile: profile, server: url)
@@ -55,7 +79,7 @@ final class AppSession {
         serverURLString = server
         loginError = nil
         phase = .loggingIn
-        let client = RocketChatClient(serverURL: url)
+        let client = makeClient(server: url)
         self.client = client
         pendingLogin = (url, user)
         do {
@@ -99,6 +123,7 @@ final class AppSession {
     }
 
     func logout() async {
+        let cacheFile = client?.cacheFileURL
         if let client {
             try? await client.logout()
             await client.stopSync()
@@ -110,6 +135,14 @@ final class AppSession {
         profile = nil
         credentials = nil
         phase = .loggedOut
+        // Cached history belongs to the session — remove it (and the SQLite
+        // sidecar files) once the connections are released.
+        if let cacheFile {
+            for suffix in ["", "-wal", "-shm"] {
+                try? FileManager.default.removeItem(
+                    at: URL(filePath: cacheFile.path(percentEncoded: false) + suffix))
+            }
+        }
     }
 
     private func activate(
