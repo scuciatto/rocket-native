@@ -27,6 +27,16 @@ struct MainWindow: View {
             guard let client = session.client else { return }
             await model.observe(client)
         }
+        .onChange(of: selectedRoomId) { _, roomId in
+            session.notifications.activeRoomId = roomId
+        }
+        .onChange(of: session.notifications.pendingRoomSelection) { _, roomId in
+            // A clicked notification routes to its room.
+            if let roomId {
+                selectedRoomId = roomId
+                session.notifications.pendingRoomSelection = nil
+            }
+        }
         .toolbar {
             if session.cacheUnavailable {
                 Label("No offline cache", systemImage: "externaldrive.badge.exclamationmark")

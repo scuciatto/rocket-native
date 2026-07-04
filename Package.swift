@@ -32,5 +32,10 @@ let package = Package(
             resources: [.copy("Fixtures")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        .testTarget(
+            name: "RocketNativeTests",
+            dependencies: ["RocketNative"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
     ]
 )
