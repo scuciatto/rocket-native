@@ -118,6 +118,7 @@ struct TimelineList: View {
 }
 
 struct MessageRow: View {
+    @Environment(AppSession.self) private var session
     let entry: TimelineEntry
     let isGrouped: Bool
 
@@ -153,36 +154,206 @@ struct MessageRow: View {
     }
 
     private var userRow: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if !isGrouped {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(message.u.name ?? message.u.username ?? "?")
-                        .fontWeight(.semibold)
-                    Text(message.ts, style: .time)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.top, 8)
+        HStack(alignment: .top, spacing: 10) {
+            if isGrouped {
+                Color.clear.frame(width: 28)
+            } else if let username = message.u.username {
+                AvatarView(username: username)
+                    .padding(.top, 8)
             }
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(message.msg)
-                    .textSelection(.enabled)
-                    .opacity(entry.delivery == .sending ? 0.5 : 1)
-                if entry.delivery == .failed {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundStyle(.red)
-                        .help("Failed to send")
+            VStack(alignment: .leading, spacing: 3) {
+                if !isGrouped {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(message.u.name ?? message.u.username ?? "?")
+                            .fontWeight(.semibold)
+                        Text(message.ts, style: .time)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.top, 8)
                 }
-                if message.editedAt != nil {
-                    Text("(edited)")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
+                messageBody
+                attachmentViews
+                reactionsRow
             }
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 1)
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var messageBody: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            if let blocks = MarkdownRenderer.blocks(from: message.md) {
+                RenderedBlocksView(blocks: blocks)
+                    .opacity(entry.delivery == .sending ? 0.5 : 1)
+            } else if !message.msg.isEmpty {
+                Text(message.msg)
+                    .textSelection(.enabled)
+                    .opacity(entry.delivery == .sending ? 0.5 : 1)
+            }
+            if entry.delivery == .failed {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundStyle(.red)
+                    .help("Failed to send")
+            }
+            if message.editedAt != nil {
+                Text("(edited)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var attachmentViews: some View {
+        ForEach(Array((message.attachments ?? []).enumerated()), id: \.offset) { _, attachment in
+            AttachmentView(attachment: attachment)
+        }
+    }
+
+    @ViewBuilder
+    private var reactionsRow: some View {
+        if let reactions = message.reactions, !reactions.isEmpty {
+            HStack(spacing: 4) {
+                ForEach(reactions.sorted(by: { $0.key < $1.key }), id: \.key) { emoji, reaction in
+                    HStack(spacing: 3) {
+                        Text(EmojiMap.unicode(forShortCode: emoji) ?? emoji)
+                        Text("\(reaction.usernames.count)")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.12))
+                    .clipShape(Capsule())
+                    .help(reaction.usernames.joined(separator: ", "))
+                }
+            }
+            .padding(.top, 2)
+        }
+    }
+}
+
+struct RenderedBlocksView: View {
+    let blocks: [MarkdownRenderer.Block]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                blockView(block)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func blockView(_ block: MarkdownRenderer.Block) -> some View {
+        switch block {
+        case .paragraph(let text):
+            Text(text).textSelection(.enabled)
+        case .heading(let level, let text):
+            Text(text)
+                .font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
+                .textSelection(.enabled)
+        case .code(_, let code):
+            ScrollView(.horizontal) {
+                Text(code)
+                    .font(.callout.monospaced())
+                    .textSelection(.enabled)
+                    .padding(8)
+            }
+            .background(Color.secondary.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        case .quote(let paragraphs):
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.secondary.opacity(0.4))
+                    .frame(width: 3)
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, text in
+                        Text(text).textSelection(.enabled)
+                    }
+                }
+                .foregroundStyle(.secondary)
+            }
+        case .list(let items, let ordered):
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(ordered ? "\(index + 1)." : "•")
+                            .foregroundStyle(.secondary)
+                        Text(item).textSelection(.enabled)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct AvatarView: View {
+    @Environment(AppSession.self) private var session
+    let username: String
+
+    var body: some View {
+        AsyncImage(url: session.client?.avatarURL(username: username, size: 56)) { image in
+            image.resizable()
+        } placeholder: {
+            Circle().fill(Color.secondary.opacity(0.25))
+                .overlay {
+                    Text(String(username.prefix(1)).uppercased())
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+        }
+        .frame(width: 28, height: 28)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+struct AttachmentView: View {
+    @Environment(AppSession.self) private var session
+    @Environment(\.openURL) private var openURL
+    let attachment: Attachment
+
+    var body: some View {
+        if let imagePath = attachment.imageURL {
+            AsyncImage(url: resolved(imagePath)) { image in
+                image.resizable().aspectRatio(contentMode: .fit)
+            } placeholder: {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.secondary.opacity(0.1))
+                    .overlay { ProgressView().controlSize(.small) }
+                    .frame(height: 120)
+            }
+            .frame(maxWidth: 360, maxHeight: 280, alignment: .leading)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        } else if let title = attachment.title {
+            Button {
+                if let path = attachment.titleLink, let url = resolved(path) {
+                    openURL(url)
+                }
+            } label: {
+                Label(title, systemImage: "doc")
+                    .font(.callout)
+            }
+            .buttonStyle(.link)
+        } else if let text = attachment.text {
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.accentColor.opacity(0.5))
+                    .frame(width: 3)
+                Text(text)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
+            }
+        }
+    }
+
+    private func resolved(_ path: String) -> URL? {
+        if path.hasPrefix("http") { return URL(string: path) }
+        return session.fileURL(path: path)
     }
 }
 

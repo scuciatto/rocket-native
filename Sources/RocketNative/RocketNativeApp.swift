@@ -5,6 +5,13 @@ struct RocketNativeApp: App {
     @State private var session = AppSession()
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        // Capped shared cache keeps avatar/image memory bounded.
+        URLCache.shared = URLCache(
+            memoryCapacity: 8 * 1024 * 1024,
+            diskCapacity: 50 * 1024 * 1024)
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

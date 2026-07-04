@@ -16,6 +16,7 @@ final class AppSession {
     private(set) var phase: Phase = .loggedOut
     private(set) var client: RocketChatClient?
     private(set) var profile: UserProfile?
+    private(set) var credentials: AuthCredentials?
     var loginError: String?
 
     /// Last used server, prefilled on the login form.
@@ -107,6 +108,7 @@ final class AppSession {
         }
         client = nil
         profile = nil
+        credentials = nil
         phase = .loggedOut
     }
 
@@ -115,11 +117,28 @@ final class AppSession {
     ) async {
         if let credentials = await client.credentials {
             KeychainStore.save(credentials, server: server)
+            self.credentials = credentials
         }
         self.client = client
         self.profile = profile
         self.phase = .active
         await client.startSync()
+    }
+
+    /// Authenticated URL for a server-hosted file (uploads, image previews).
+    func fileURL(path: String) -> URL? {
+        guard let base = URL(string: serverURLString) else { return nil }
+        let relative = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        guard var components = URLComponents(
+            url: base.appending(path: relative), resolvingAgainstBaseURL: false)
+        else { return nil }
+        if let credentials {
+            components.queryItems = [
+                URLQueryItem(name: "rc_uid", value: credentials.userId),
+                URLQueryItem(name: "rc_token", value: credentials.authToken),
+            ]
+        }
+        return components.url
     }
 
     private func friendlyMessage(_ error: Error) -> String {
