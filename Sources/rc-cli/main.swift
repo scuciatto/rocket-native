@@ -211,6 +211,25 @@ func runSend(room nameOrId: String, text: String) async {
     }
 }
 
+func runTail(room nameOrId: String) async {
+    let (client, _) = await authenticatedClient()
+    await client.startSync()
+    let room = await resolveRoom(client, nameOrId)
+    do {
+        let handle = try await client.openRoom(room.id)
+        print("Tailing \(room.displayName) — Ctrl-C to stop")
+        var printedIds = Set<String>()
+        for await snapshot in await handle.timelineUpdates() {
+            for entry in snapshot.entries where !printedIds.contains(entry.id) {
+                printedIds.insert(entry.id)
+                printMessage(entry.message)
+            }
+        }
+    } catch {
+        fail(describe(error))
+    }
+}
+
 func runLogout() async {
     let (client, _) = await authenticatedClient()
     try? await client.logout()
@@ -240,6 +259,9 @@ case "history":
 case "send":
     guard arguments.count >= 3 else { fail("usage: rc-cli send <room> <text...>") }
     await runSend(room: arguments[1], text: arguments.dropFirst(2).joined(separator: " "))
+case "tail":
+    guard arguments.count == 2 else { fail("usage: rc-cli tail <room>") }
+    await runTail(room: arguments[1])
 default:
     print("""
     rc-cli — Rocket.Chat SDK smoke tool

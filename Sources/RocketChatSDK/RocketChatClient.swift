@@ -9,6 +9,7 @@ public final class RocketChatClient: Sendable {
     public let serverURL: URL
     let rest: RESTClient
     let auth: AuthSession
+    let engine: SyncEngine
 
     public convenience init(
         serverURL: URL, transport: HTTPTransport = URLSessionTransport()
@@ -16,12 +17,52 @@ public final class RocketChatClient: Sendable {
         self.init(serverURL: serverURL, transport: transport, clock: SystemClock())
     }
 
-    init(serverURL: URL, transport: HTTPTransport, clock: RESTClock) {
+    init(
+        serverURL: URL, transport: HTTPTransport, clock: RESTClock,
+        syncConfig: SyncEngine.Config = SyncEngine.Config()
+    ) {
         self.serverURL = serverURL
         let auth = AuthSession()
         self.auth = auth
-        self.rest = RESTClient(
+        let rest = RESTClient(
             serverURL: serverURL, transport: transport, auth: auth, clock: clock)
+        self.rest = rest
+        self.engine = SyncEngine(
+            rest: rest, auth: auth, clock: clock, config: syncConfig)
+    }
+
+    // MARK: - Live sync
+
+    /// Starts the sidebar poll loop. Requires credentials.
+    public func startSync() async {
+        await engine.start()
+    }
+
+    /// Stops all polling (sidebar and any open rooms).
+    public func stopSync() async {
+        await engine.stop()
+    }
+
+    /// Tell the SDK whether the app is frontmost; idle apps poll slower.
+    public func setAppActive(_ active: Bool) async {
+        await engine.setAppActive(active)
+    }
+
+    /// Sidebar snapshots: yields current state immediately, then on change.
+    public func roomListUpdates() async -> AsyncStream<[RoomSummary]> {
+        await engine.roomStore.updates()
+    }
+
+    /// Poll-loop health, for a connection indicator.
+    public func syncStateUpdates() async -> AsyncStream<SyncState> {
+        await engine.stateUpdates()
+    }
+
+    /// Opens a live view into a room: loads the newest page and starts the
+    /// fast poll loop. Call `close()` on the handle when done.
+    public func openRoom(_ roomId: String) async throws -> RoomHandle {
+        try await engine.openRoom(roomId)
+        return RoomHandle(roomId: roomId, engine: engine, client: self)
     }
 
     // MARK: - Authentication
@@ -74,7 +115,9 @@ public final class RocketChatClient: Sendable {
     }
 
     public func me() async throws -> UserProfile {
-        try await rest.send(API.Auth.me())
+        let profile = try await rest.send(API.Auth.me())
+        await auth.setProfile(profile)
+        return profile
     }
 
     public func logout() async throws {
@@ -156,7 +199,10 @@ public final class RocketChatClient: Sendable {
             authToken: response.data.authToken,
             userId: response.data.userId)
         await auth.set(credentials)
-        if let me = response.data.me { return me }
+        if let me = response.data.me {
+            await auth.setProfile(me)
+            return me
+        }
         return (try? await me()) ?? UserProfile(_id: response.data.userId)
     }
 }

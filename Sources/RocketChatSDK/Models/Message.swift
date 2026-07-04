@@ -36,6 +36,36 @@ public struct Message: Codable, Sendable, Identifiable, Equatable {
         public var usernames: [String]
         public var names: [String?]?
     }
+
+    public init(
+        _id: String, rid: String, msg: String, ts: Date, u: MiniUser,
+        _updatedAt: Date? = nil, editedAt: Date? = nil, editedBy: MiniUser? = nil,
+        t: String? = nil, attachments: [Attachment]? = nil,
+        reactions: [String: Reaction]? = nil, md: JSONValue? = nil,
+        tmid: String? = nil, tcount: Int? = nil, tlm: Date? = nil,
+        replies: [String]? = nil, pinned: Bool? = nil, starred: JSONValue? = nil,
+        urls: [JSONValue]? = nil
+    ) {
+        self._id = _id
+        self.rid = rid
+        self.msg = msg
+        self.ts = ts
+        self.u = u
+        self._updatedAt = _updatedAt
+        self.editedAt = editedAt
+        self.editedBy = editedBy
+        self.t = t
+        self.attachments = attachments
+        self.reactions = reactions
+        self.md = md
+        self.tmid = tmid
+        self.tcount = tcount
+        self.tlm = tlm
+        self.replies = replies
+        self.pinned = pinned
+        self.starred = starred
+        self.urls = urls
+    }
 }
 
 public struct Attachment: Codable, Sendable, Equatable {
