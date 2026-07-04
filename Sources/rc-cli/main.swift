@@ -52,7 +52,19 @@ func authenticatedClient() async -> (RocketChatClient, CLISession) {
     guard let session = loadSession() else {
         fail("no session — run `rc-cli login <server-url> <username>` first")
     }
-    let client = RocketChatClient(serverURL: session.serverURL)
+    // RC_CACHE_DIR opts into the SQLite offline cache (also smoke-tests it).
+    let client: RocketChatClient
+    if let cacheDir = ProcessInfo.processInfo.environment["RC_CACHE_DIR"] {
+        do {
+            client = try RocketChatClient(
+                serverURL: session.serverURL,
+                cache: .sqlite(directory: URL(filePath: cacheDir, directoryHint: .isDirectory)))
+        } catch {
+            fail("could not open cache in \(cacheDir): \(error)")
+        }
+    } else {
+        client = RocketChatClient(serverURL: session.serverURL)
+    }
     await client.adopt(credentials: AuthCredentials(
         authToken: session.authToken, userId: session.userId))
     return (client, session)

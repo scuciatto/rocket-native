@@ -5,11 +5,10 @@ Roughly ordered by expected value.
 
 ## From the plan's post-v1 backlog
 
-1. **Offline cache (GRDB/SQLite)** — replace `InMemoryRoomStore` /
-   `InMemoryMessageStore` behind the existing `RoomStoring` / `MessageStoring`
-   protocols. Buys offline history, instant cold launch, and less re-sync
-   traffic. The delta endpoints (`updatedSince` / `lastUpdate` high-water
-   marks) were designed for exactly this.
+1. ~~**Offline cache (GRDB/SQLite)**~~ — **done** (feature/offline-cache-sqlite):
+   SQLite-backed stores via the system `libsqlite3` (no GRDB dependency needed),
+   persisted sync marks, per-host db enabled by the app and cleared on logout.
+   Follow-up noted below (#19).
 2. **Notifications** — local notifications from the sidebar poll
    (`stream-notify-user` is streamer-only, but `subscriptions.get` deltas
    carry unread/mention changes). Badge count on the Dock icon.
@@ -63,6 +62,11 @@ Roughly ordered by expected value.
     add ⌘B/⌘I/⌘⇧X selection wrapping, a code-fence helper, and optionally a
     live preview toggle. Note: optimistic sends show raw text until the
     server echo arrives with the parsed `md` AST (sub-second).
+19. **Cache follow-ups** — edits/deletes that happen while the client is
+    offline are only reconciled for the newest page of each room (room-tier
+    sync resumes from the fetched page, not the persisted mark, to avoid
+    unbounded catch-up responses); consider bounded backfill. Also: cache
+    size cap/pruning for very active workspaces.
 
 ## Known v1 limitations (accepted, documented in README)
 

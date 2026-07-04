@@ -27,6 +27,7 @@ actor SyncEngine {
     private let config: Config
     let roomStore: RoomStoring
     let messageStore: MessageStoring
+    let markStore: SyncMarkStoring
 
     private var appActive = true
     private var sidebarTask: Task<Void, Never>?
@@ -52,7 +53,8 @@ actor SyncEngine {
         clock: RESTClock,
         config: Config = Config(),
         roomStore: RoomStoring = InMemoryRoomStore(),
-        messageStore: MessageStoring = InMemoryMessageStore()
+        messageStore: MessageStoring = InMemoryMessageStore(),
+        markStore: SyncMarkStoring = InMemorySyncMarkStore()
     ) {
         self.rest = rest
         self.auth = auth
@@ -60,6 +62,7 @@ actor SyncEngine {
         self.config = config
         self.roomStore = roomStore
         self.messageStore = messageStore
+        self.markStore = markStore
     }
 
     // MARK: - Lifecycle
@@ -67,6 +70,7 @@ actor SyncEngine {
     func start() async {
         guard sidebarTask == nil else { return }
         setState(.syncing)
+        await loadPersistedMarks()
         await tickSidebar()
         sidebarTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -106,6 +110,17 @@ actor SyncEngine {
         }
     }
 
+    /// With a persistent mark store, resume from the last session's server
+    /// timestamps — the first tick is a delta, not a full re-sync.
+    func loadPersistedMarks() async {
+        if roomsHighWater == nil {
+            roomsHighWater = await markStore.mark(for: "rooms")
+        }
+        if subscriptionsHighWater == nil {
+            subscriptionsHighWater = await markStore.mark(for: "subscriptions")
+        }
+    }
+
     // MARK: - Sidebar tier
 
     func tickSidebar() async {
@@ -120,6 +135,12 @@ actor SyncEngine {
             advance(&roomsHighWater, past: (rooms.remove ?? []).compactMap(\._updatedAt))
             advance(&subscriptionsHighWater, past: subscriptions.update.compactMap(\._updatedAt))
             advance(&subscriptionsHighWater, past: (subscriptions.remove ?? []).compactMap(\._updatedAt))
+            if let mark = roomsHighWater {
+                await markStore.set(mark, for: "rooms")
+            }
+            if let mark = subscriptionsHighWater {
+                await markStore.set(mark, for: "subscriptions")
+            }
 
             await roomStore.apply(
                 roomsUpdated: rooms.update,
@@ -161,7 +182,10 @@ actor SyncEngine {
         let type = await roomStore.roomType(roomId) ?? .channel
         let page = try await rest.send(API.roomMessages(
             roomId: roomId, type: type, count: config.pageSize, offset: 0))
-        await messageStore.resetRoom(roomId, messages: page.messages)
+        // Upsert (not reset) so a persistent store keeps cached scroll-back;
+        // the newest page corrects anything stale at the tail.
+        await messageStore.apply(
+            delta: MessageDelta(updated: page.messages, deleted: []), in: roomId)
         var highWater: Date?
         advance(&highWater, past: page.messages.map { $0._updatedAt ?? $0.ts })
         roomHighWater[roomId] = highWater ?? clock.now
