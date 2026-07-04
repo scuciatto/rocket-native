@@ -80,7 +80,8 @@ private func makeClient(_ transport: MockHTTPTransport) async -> RocketChatClien
         try await client.engine.openThread("t1", startPolling: false)
         await client.engine.tickThread("t1")
 
-        let handle = ThreadHandle(threadId: "t1", roomId: "r1", engine: client.engine)
+        let handle = ThreadHandle(
+            threadId: "t1", roomId: "r1", engine: client.engine, client: client)
         let snapshot = await handle.timeline()
         #expect(snapshot.entries.map(\.id) == ["reply-1", "reply-2"])
 

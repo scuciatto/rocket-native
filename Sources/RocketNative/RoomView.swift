@@ -3,6 +3,21 @@ import RocketChatSDK
 
 /// One room's timeline + composer. Owns the SDK `RoomHandle` for its
 /// lifetime: opened on appear, closed on disappear.
+/// Per-message affordances a timeline offers; rows only get what their
+/// container wires up (e.g. thread panels don't offer "Reply in Thread").
+struct MessageActions {
+    var openThread: ((Message) -> Void)?
+    var react: ((Message, String) -> Void)?
+    var edit: ((Message) -> Void)?
+    var delete: ((Message) -> Void)?
+
+    /// Reaction palette for the context menu, shortcode → glyph.
+    static let quickReactions: [(code: String, glyph: String)] = [
+        ("thumbsup", "👍"), ("heart", "❤️"), ("joy", "😂"),
+        ("tada", "🎉"), ("eyes", "👀"), ("white_check_mark", "✅"),
+    ]
+}
+
 struct RoomView: View {
     @Environment(AppSession.self) private var session
     let room: RoomSummary
@@ -10,20 +25,57 @@ struct RoomView: View {
     @State private var draft = ""
     @State private var activeThread: Message?
     @State private var showSearch = false
+    @State private var editingMessage: Message?
+    @State private var deleteCandidate: Message?
 
     var body: some View {
         VStack(spacing: 0) {
             TimelineList(
                 entries: model.entries,
                 loadOlder: { await model.loadOlder() },
-                onOpenThread: { activeThread = $0 })
+                actions: MessageActions(
+                    openThread: { activeThread = $0 },
+                    react: { message, emoji in
+                        Task { await model.react(message: message, emoji: emoji) }
+                    },
+                    edit: { message in
+                        editingMessage = message
+                        draft = message.msg
+                    },
+                    delete: { deleteCandidate = $0 }))
             Divider()
+            if let editing = editingMessage {
+                EditingBanner(message: editing) {
+                    editingMessage = nil
+                    draft = ""
+                }
+            }
             ComposerBar(draft: $draft, roomName: room.displayName) {
                 let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { return }
                 draft = ""
-                await model.send(text)
+                if let editing = editingMessage {
+                    editingMessage = nil
+                    await model.edit(messageId: editing._id, text: text)
+                } else {
+                    await model.send(text)
+                }
             }
+        }
+        .confirmationDialog(
+            "Delete this message?",
+            isPresented: .init(
+                get: { deleteCandidate != nil },
+                set: { if !$0 { deleteCandidate = nil } }),
+            presenting: deleteCandidate
+        ) { message in
+            Button("Delete", role: .destructive) {
+                deleteCandidate = nil
+                Task { await model.delete(messageId: message._id) }
+            }
+            Button("Cancel", role: .cancel) { deleteCandidate = nil }
+        } message: { message in
+            Text("“\(message.msg.prefix(80))” will be deleted for everyone.")
         }
         .navigationTitle(room.displayName)
         .navigationSubtitle(room.topic ?? "")
@@ -99,6 +151,26 @@ final class TimelineModel {
         }
     }
 
+    func react(message: Message, emoji: String) async {
+        try? await handle?.react(messageId: message._id, emoji: emoji)
+    }
+
+    func edit(messageId: String, text: String) async {
+        do {
+            try await handle?.edit(messageId: messageId, text: text)
+        } catch {
+            sendError = "Edit failed."
+        }
+    }
+
+    func delete(messageId: String) async {
+        do {
+            try await handle?.delete(messageId: messageId)
+        } catch {
+            sendError = "Delete failed."
+        }
+    }
+
     func loadOlder() async {
         try? await handle?.loadOlder()
     }
@@ -114,7 +186,7 @@ final class TimelineModel {
 struct TimelineList: View {
     let entries: [TimelineEntry]
     let loadOlder: () async -> Void
-    var onOpenThread: ((Message) -> Void)?
+    var actions: MessageActions?
 
     /// Thread replies (tmid set, not echoed to main) live in the thread panel.
     private var mainEntries: [TimelineEntry] {
@@ -136,7 +208,7 @@ struct TimelineList: View {
                     MessageRow(
                         entry: entry,
                         isGrouped: isGrouped(visible, at: index),
-                        onOpenThread: onOpenThread)
+                        actions: actions)
                 }
             }
             .padding(.bottom, 8)
@@ -159,9 +231,15 @@ struct MessageRow: View {
     @Environment(AppSession.self) private var session
     let entry: TimelineEntry
     let isGrouped: Bool
-    var onOpenThread: ((Message) -> Void)?
+    var actions: MessageActions?
+
+    @State private var isHovering = false
 
     private var message: Message { entry.message }
+
+    private var isOwnMessage: Bool {
+        session.profile?._id == message.u._id
+    }
 
     var body: some View {
         if message.t != nil {
@@ -220,19 +298,49 @@ struct MessageRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 1)
+        .background(isHovering ? Color.secondary.opacity(0.07) : .clear)
+        .overlay(alignment: .topTrailing) {
+            if isHovering, actions != nil, entry.delivery == .sent {
+                MessageActionBar(
+                    message: message,
+                    isOwnMessage: isOwnMessage,
+                    actions: actions!)
+                    .padding(.trailing, 12)
+                    .offset(y: -6)
+            }
+        }
+        .onHover { hovering in
+            isHovering = hovering
+        }
         .contentShape(Rectangle())
         .contextMenu {
-            if let onOpenThread {
-                Button("Reply in Thread") { onOpenThread(message) }
+            if let react = actions?.react, entry.delivery == .sent {
+                ForEach(MessageActions.quickReactions, id: \.code) { reaction in
+                    Button("\(reaction.glyph) :\(reaction.code):") {
+                        react(message, ":\(reaction.code):")
+                    }
+                }
+                Divider()
+            }
+            if let openThread = actions?.openThread {
+                Button("Reply in Thread") { openThread(message) }
+            }
+            if isOwnMessage, entry.delivery != .sending {
+                if let edit = actions?.edit {
+                    Button("Edit Message") { edit(message) }
+                }
+                if let delete = actions?.delete {
+                    Button("Delete Message…", role: .destructive) { delete(message) }
+                }
             }
         }
     }
 
     @ViewBuilder
     private var threadIndicator: some View {
-        if let count = message.tcount, count > 0, let onOpenThread {
+        if let count = message.tcount, count > 0, let openThread = actions?.openThread {
             Button {
-                onOpenThread(message)
+                openThread(message)
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "bubble.left.and.bubble.right")
@@ -285,21 +393,144 @@ struct MessageRow: View {
         if let reactions = message.reactions, !reactions.isEmpty {
             HStack(spacing: 4) {
                 ForEach(reactions.sorted(by: { $0.key < $1.key }), id: \.key) { emoji, reaction in
-                    HStack(spacing: 3) {
-                        Text(EmojiMap.unicode(forShortCode: emoji) ?? emoji)
-                        Text("\(reaction.usernames.count)")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
+                    let mine = reaction.usernames.contains(session.profile?.username ?? "")
+                    Button {
+                        actions?.react?(message, emoji)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text(EmojiMap.unicode(forShortCode: emoji) ?? emoji)
+                            Text("\(reaction.usernames.count)")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(mine ? Color.accentColor : .secondary)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(mine
+                            ? Color.accentColor.opacity(0.18)
+                            : Color.secondary.opacity(0.12))
+                        .overlay {
+                            if mine {
+                                Capsule().strokeBorder(
+                                    Color.accentColor.opacity(0.5), lineWidth: 1)
+                            }
+                        }
+                        .clipShape(Capsule())
                     }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.secondary.opacity(0.12))
-                    .clipShape(Capsule())
+                    .buttonStyle(.plain)
+                    .disabled(actions?.react == nil)
                     .help(reaction.usernames.joined(separator: ", "))
                 }
             }
             .padding(.top, 2)
         }
+    }
+}
+
+/// Floating hover toolbar over a message: quick reactions, more-reactions
+/// menu, thread reply, and edit/delete for own messages.
+struct MessageActionBar: View {
+    let message: Message
+    let isOwnMessage: Bool
+    let actions: MessageActions
+
+    var body: some View {
+        HStack(spacing: 2) {
+            if let react = actions.react {
+                // Two most-used reactions inline, the rest behind a menu.
+                ForEach(MessageActions.quickReactions.prefix(2), id: \.code) { reaction in
+                    barButton(help: ":\(reaction.code):") {
+                        react(message, ":\(reaction.code):")
+                    } label: {
+                        Text(reaction.glyph).font(.system(size: 13))
+                    }
+                }
+                Menu {
+                    ForEach(MessageActions.quickReactions, id: \.code) { reaction in
+                        Button("\(reaction.glyph) :\(reaction.code):") {
+                            react(message, ":\(reaction.code):")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "face.smiling")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 26, height: 24)
+                .help("Add reaction")
+            }
+            if let openThread = actions.openThread {
+                barButton(help: "Reply in thread") {
+                    openThread(message)
+                } label: {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                }
+            }
+            if isOwnMessage {
+                if let edit = actions.edit {
+                    barButton(help: "Edit message") {
+                        edit(message)
+                    } label: {
+                        Image(systemName: "pencil")
+                    }
+                }
+                if let delete = actions.delete {
+                    barButton(help: "Delete message") {
+                        delete(message)
+                    } label: {
+                        Image(systemName: "trash")
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+        }
+        .padding(3)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+    }
+
+    private func barButton(
+        help: String, action: @escaping () -> Void,
+        @ViewBuilder label: () -> some View
+    ) -> some View {
+        Button(action: action, label: label)
+            .buttonStyle(.borderless)
+            .frame(width: 26, height: 24)
+            .contentShape(Rectangle())
+            .help(help)
+    }
+}
+
+/// Shown above the composer while editing; Esc or the button cancels.
+struct EditingBanner: View {
+    let message: Message
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "pencil")
+            Text("Editing message")
+                .fontWeight(.medium)
+            Text(message.msg)
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                onCancel()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.accentColor.opacity(0.08))
     }
 }
 
