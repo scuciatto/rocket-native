@@ -233,6 +233,8 @@ struct MessageRow: View {
     let isGrouped: Bool
     var actions: MessageActions?
 
+    @State private var isHovering = false
+
     private var message: Message { entry.message }
 
     private var isOwnMessage: Bool {
@@ -296,6 +298,20 @@ struct MessageRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 1)
+        .background(isHovering ? Color.secondary.opacity(0.07) : .clear)
+        .overlay(alignment: .topTrailing) {
+            if isHovering, actions != nil, entry.delivery == .sent {
+                MessageActionBar(
+                    message: message,
+                    isOwnMessage: isOwnMessage,
+                    actions: actions!)
+                    .padding(.trailing, 12)
+                    .offset(y: -6)
+            }
+        }
+        .onHover { hovering in
+            isHovering = hovering
+        }
         .contentShape(Rectangle())
         .contextMenu {
             if let react = actions?.react, entry.delivery == .sent {
@@ -407,6 +423,84 @@ struct MessageRow: View {
             }
             .padding(.top, 2)
         }
+    }
+}
+
+/// Floating hover toolbar over a message: quick reactions, more-reactions
+/// menu, thread reply, and edit/delete for own messages.
+struct MessageActionBar: View {
+    let message: Message
+    let isOwnMessage: Bool
+    let actions: MessageActions
+
+    var body: some View {
+        HStack(spacing: 2) {
+            if let react = actions.react {
+                // Two most-used reactions inline, the rest behind a menu.
+                ForEach(MessageActions.quickReactions.prefix(2), id: \.code) { reaction in
+                    barButton(help: ":\(reaction.code):") {
+                        react(message, ":\(reaction.code):")
+                    } label: {
+                        Text(reaction.glyph).font(.system(size: 13))
+                    }
+                }
+                Menu {
+                    ForEach(MessageActions.quickReactions, id: \.code) { reaction in
+                        Button("\(reaction.glyph) :\(reaction.code):") {
+                            react(message, ":\(reaction.code):")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "face.smiling")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 26, height: 24)
+                .help("Add reaction")
+            }
+            if let openThread = actions.openThread {
+                barButton(help: "Reply in thread") {
+                    openThread(message)
+                } label: {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                }
+            }
+            if isOwnMessage {
+                if let edit = actions.edit {
+                    barButton(help: "Edit message") {
+                        edit(message)
+                    } label: {
+                        Image(systemName: "pencil")
+                    }
+                }
+                if let delete = actions.delete {
+                    barButton(help: "Delete message") {
+                        delete(message)
+                    } label: {
+                        Image(systemName: "trash")
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+        }
+        .padding(3)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+    }
+
+    private func barButton(
+        help: String, action: @escaping () -> Void,
+        @ViewBuilder label: () -> some View
+    ) -> some View {
+        Button(action: action, label: label)
+            .buttonStyle(.borderless)
+            .frame(width: 26, height: 24)
+            .contentShape(Rectangle())
+            .help(help)
     }
 }
 
