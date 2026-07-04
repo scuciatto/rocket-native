@@ -17,6 +17,9 @@ final class AppSession {
     private(set) var client: RocketChatClient?
     private(set) var profile: UserProfile?
     private(set) var credentials: AuthCredentials?
+    /// True when the SQLite cache could not be opened and the session is
+    /// running in-memory — surfaced in the UI instead of failing silently.
+    private(set) var cacheUnavailable = false
     var loginError: String?
 
     /// Last used server, prefilled on the login form.
@@ -38,11 +41,18 @@ final class AppSession {
             .appending(path: "RocketNative")
     }
 
-    /// SQLite-cached client; falls back to in-memory if the database can't open.
+    /// SQLite-cached client; falls back to in-memory (with a visible warning)
+    /// if the database can't open.
     private func makeClient(server: URL) -> RocketChatClient {
-        (try? RocketChatClient(
-            serverURL: server, cache: .sqlite(directory: Self.cacheDirectory)))
-            ?? RocketChatClient(serverURL: server)
+        do {
+            let client = try RocketChatClient(
+                serverURL: server, cache: .sqlite(directory: Self.cacheDirectory))
+            cacheUnavailable = false
+            return client
+        } catch {
+            cacheUnavailable = true
+            return RocketChatClient(serverURL: server)
+        }
     }
 
     /// Tries to resume a stored session on launch.
