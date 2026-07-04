@@ -5,6 +5,9 @@ import RocketChatSDK
 // ~/.config/rc-cli/session.json; this is a developer tool, not the app
 // (the app stores credentials in the Keychain).
 
+// Line-buffer stdout so `tail` output streams when piped/redirected.
+setlinebuf(stdout)
+
 struct CLISession: Codable {
     var serverURL: URL
     var authToken: String

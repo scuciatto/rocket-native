@@ -44,10 +44,13 @@ extension API.Chat {
     ) -> Endpoint<ThreadsListResponse> {
         var query = [
             URLQueryItem(name: "rid", value: roomId),
-            URLQueryItem(name: "type", value: filter.rawValue),
             URLQueryItem(name: "count", value: String(count)),
             URLQueryItem(name: "offset", value: String(offset)),
         ]
+        // Live 7.x servers reject `type=all`; omitting the param means "all".
+        if filter != .all {
+            query.append(URLQueryItem(name: "type", value: filter.rawValue))
+        }
         if let text, !text.isEmpty {
             query.append(URLQueryItem(name: "text", value: text))
         }

@@ -9,6 +9,7 @@ let package = Package(
     products: [
         .library(name: "RocketChatSDK", targets: ["RocketChatSDK"]),
         .executable(name: "rc-cli", targets: ["rc-cli"]),
+        .executable(name: "RocketNative", targets: ["RocketNative"]),
     ],
     targets: [
         .target(
@@ -17,6 +18,11 @@ let package = Package(
         ),
         .executableTarget(
             name: "rc-cli",
+            dependencies: ["RocketChatSDK"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .executableTarget(
+            name: "RocketNative",
             dependencies: ["RocketChatSDK"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),

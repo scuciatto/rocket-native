@@ -19,6 +19,8 @@ private func makeClient(_ transport: MockHTTPTransport) async -> RocketChatClien
                 .queryItems
             #expect(query?.first { $0.name == "rid" }?.value == "r1")
             #expect(query?.first { $0.name == "type" }?.value == "unread")
+            // `type=all` must be omitted (7.x servers reject it) — covered by
+            // using .unread here; the .all case is asserted below.
             return (Data("""
                 {"threads": [
                   {"_id": "t1", "rid": "r1", "msg": "topic?", "tcount": 4,
@@ -33,6 +35,20 @@ private func makeClient(_ transport: MockHTTPTransport) async -> RocketChatClien
         let threads = try await client.threads(in: "r1", filter: .unread)
         #expect(threads.count == 1)
         #expect(threads[0].tcount == 4)
+    }
+
+    @Test func allFilterOmitsTypeParam() async throws {
+        let transport = MockHTTPTransport()
+        transport.expect { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .queryItems
+            #expect(query?.contains { $0.name == "type" } == false)
+            return (Data(#"{"threads": [], "total": 0, "success": true}"#.utf8),
+                    MockHTTPTransport.httpResponse(url: request.url!, status: 200))
+        }
+
+        let client = await makeClient(transport)
+        _ = try await client.threads(in: "r1", filter: .all)
     }
 
     @Test func openThreadLoadsRepliesAndSyncsSeparatelyFromRoom() async throws {
