@@ -6,6 +6,10 @@ streamer API is deprecated and must not be used. Live updates come from
 delta-sync polling (`chat.syncMessages`, `subscriptions.get?updatedSince=`).
 
 Full plan: `~/.claude/plans/look-ate-rocket-chat-api-piped-crayon.md`
+Backlog: `BACKLOG.md`, mirrored to the app's default GitHub project:
+https://github.com/users/scuciatto/projects/2 ("Rocket Native Development").
+Keep the two in sync when adding backlog items (`gh project item-create 2
+--owner scuciatto --title ... --body ...`).
 
 ## Commands
 
