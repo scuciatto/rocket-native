@@ -194,6 +194,83 @@ public final class RocketChatClient: Sendable {
             messageId: messageId, emoji: emoji, shouldReact: on))
     }
 
+    // MARK: - Threads
+
+    /// Thread parents in a room (messages carrying `tcount`/`tlm`), newest first.
+    public func threads(
+        in roomId: String, filter: ThreadFilter = .all, text: String? = nil,
+        count: Int = 50, offset: Int = 0
+    ) async throws -> [Message] {
+        try await rest.send(API.Chat.getThreadsList(
+            roomId: roomId, filter: filter, text: text, count: count, offset: offset)
+        ).threads
+    }
+
+    /// Opens a live view into a thread: loads its replies and starts a fast
+    /// poll loop. Call `close()` on the handle when done.
+    public func openThread(_ threadId: String, in roomId: String) async throws -> ThreadHandle {
+        try await engine.openThread(threadId)
+        return ThreadHandle(threadId: threadId, roomId: roomId, engine: engine)
+    }
+
+    /// Follow/unfollow a thread (its parent message id).
+    public func followThread(_ messageId: String, follow: Bool = true) async throws {
+        _ = try await rest.send(
+            follow
+                ? API.Chat.followMessage(messageId: messageId)
+                : API.Chat.unfollowMessage(messageId: messageId))
+    }
+
+    // MARK: - Search & directory
+
+    /// Full-text message search within one room.
+    public func searchMessages(
+        in roomId: String, text: String, count: Int = 20, offset: Int = 0
+    ) async throws -> [Message] {
+        try await rest.send(API.Search.chatSearch(
+            roomId: roomId, text: text, count: count, offset: offset)
+        ).messages
+    }
+
+    /// Global search for users and reachable-but-not-joined rooms.
+    /// Supports `#channel` and `@user` prefixes.
+    public func spotlight(_ query: String) async throws -> SpotlightResult {
+        try await rest.send(API.Search.spotlight(query: query))
+    }
+
+    /// Workspace directory listing (users, channels, or teams).
+    public func directory(
+        text: String, type: DirectoryType = .channels, count: Int = 20, offset: Int = 0
+    ) async throws -> Paginated<DirectoryEntry> {
+        let response = try await rest.send(API.Search.directory(
+            text: text, type: type, count: count, offset: offset))
+        return Paginated(
+            items: response.result,
+            offset: response.offset ?? offset,
+            total: response.total ?? response.result.count)
+    }
+
+    public func userInfo(username: String) async throws -> UserProfile {
+        try await rest.send(API.Users.info(username: username)).user
+    }
+
+    /// Avatar URL for a username. Append the user's `avatarETag` when known so
+    /// avatar changes bust image caches naturally.
+    public func avatarURL(username: String, size: Int? = nil, etag: String? = nil) -> URL {
+        var components = URLComponents(
+            url: serverURL.appending(path: "avatar/\(username)"),
+            resolvingAgainstBaseURL: false)!
+        var query = [URLQueryItem(name: "format", value: "png")]
+        if let size {
+            query.append(URLQueryItem(name: "size", value: String(size)))
+        }
+        if let etag {
+            query.append(URLQueryItem(name: "etag", value: etag))
+        }
+        components.queryItems = query
+        return components.url!
+    }
+
     private func adoptSession(from response: LoginResponse) async -> UserProfile {
         let credentials = AuthCredentials(
             authToken: response.data.authToken,

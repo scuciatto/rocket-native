@@ -230,6 +230,71 @@ func runTail(room nameOrId: String) async {
     }
 }
 
+func runThreads(room nameOrId: String) async {
+    let (client, _) = await authenticatedClient()
+    let room = await resolveRoom(client, nameOrId)
+    do {
+        let threads = try await client.threads(in: room.id)
+        for thread in threads {
+            let replies = thread.tcount ?? 0
+            let last = thread.tlm.map(timestamp) ?? "?"
+            print("\(thread._id)  [\(replies) replies, last \(last)] "
+                + "<\(thread.u.username ?? "?")> \(thread.msg.prefix(60))")
+        }
+        if threads.isEmpty { print("no threads in \(room.displayName)") }
+    } catch {
+        fail(describe(error))
+    }
+}
+
+func runSearch(room nameOrId: String, text: String) async {
+    let (client, _) = await authenticatedClient()
+    let room = await resolveRoom(client, nameOrId)
+    do {
+        let hits = try await client.searchMessages(in: room.id, text: text)
+        for message in hits.reversed() {
+            printMessage(message)
+        }
+        if hits.isEmpty { print("no matches") }
+    } catch {
+        fail(describe(error))
+    }
+}
+
+func runSpotlight(query: String) async {
+    let (client, _) = await authenticatedClient()
+    do {
+        let result = try await client.spotlight(query)
+        for user in result.users {
+            print("@\(user.username ?? "?")  \(user.name ?? "")  [\(user.status ?? "unknown")]")
+        }
+        for room in result.rooms {
+            print("#\(room.name ?? room._id)")
+        }
+        if result.users.isEmpty && result.rooms.isEmpty { print("no matches") }
+    } catch {
+        fail(describe(error))
+    }
+}
+
+func runDirectory(text: String, type: DirectoryType) async {
+    let (client, _) = await authenticatedClient()
+    do {
+        let page = try await client.directory(text: text, type: type)
+        for entry in page.items {
+            switch type {
+            case .users:
+                print("@\(entry.username ?? "?")  \(entry.name ?? "")")
+            case .channels, .teams:
+                print("#\(entry.name ?? "?")  (\(entry.usersCount ?? 0) members)  \(entry.topic ?? "")")
+            }
+        }
+        print("— \(page.items.count) of \(page.total)")
+    } catch {
+        fail(describe(error))
+    }
+}
+
 func runLogout() async {
     let (client, _) = await authenticatedClient()
     try? await client.logout()
@@ -262,19 +327,36 @@ case "send":
 case "tail":
     guard arguments.count == 2 else { fail("usage: rc-cli tail <room>") }
     await runTail(room: arguments[1])
+case "threads":
+    guard arguments.count == 2 else { fail("usage: rc-cli threads <room>") }
+    await runThreads(room: arguments[1])
+case "search":
+    guard arguments.count >= 3 else { fail("usage: rc-cli search <room> <text...>") }
+    await runSearch(room: arguments[1], text: arguments.dropFirst(2).joined(separator: " "))
+case "spotlight":
+    guard arguments.count >= 2 else { fail("usage: rc-cli spotlight <query...>") }
+    await runSpotlight(query: arguments.dropFirst().joined(separator: " "))
+case "directory":
+    guard arguments.count >= 2 else { fail("usage: rc-cli directory <text> [users|channels|teams]") }
+    let type = arguments.count > 2
+        ? DirectoryType(rawValue: arguments[2]) ?? .channels : .channels
+    await runDirectory(text: arguments[1], type: type)
 default:
     print("""
     rc-cli — Rocket.Chat SDK smoke tool
 
     Usage:
-      rc-cli login <server-url> <username>   Log in (supports 2FA)
-      rc-cli me                              Show the authenticated user
-      rc-cli rooms                           List joined rooms with unread state
-      rc-cli history <room> [count]          Show recent messages (default 20)
-      rc-cli send <room> <text...>           Send a message
-      rc-cli logout                          Invalidate and forget the session
-
-    Coming as SDK phases land: tail, search, spotlight
+      rc-cli login <server-url> <username>     Log in (supports 2FA)
+      rc-cli me                                Show the authenticated user
+      rc-cli rooms                             List joined rooms with unread state
+      rc-cli history <room> [count]            Show recent messages (default 20)
+      rc-cli send <room> <text...>             Send a message
+      rc-cli tail <room>                       Follow a room live (delta polling)
+      rc-cli threads <room>                    List threads in a room
+      rc-cli search <room> <text...>           Search messages in a room
+      rc-cli spotlight <query...>              Global user/channel search
+      rc-cli directory <text> [users|channels|teams]
+      rc-cli logout                            Invalidate and forget the session
     """)
     exit(arguments.isEmpty ? 0 : 1)
 }

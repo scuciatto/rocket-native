@@ -31,10 +31,16 @@ actor SyncEngine {
     private var appActive = true
     private var sidebarTask: Task<Void, Never>?
     private var roomTasks: [String: Task<Void, Never>] = [:]
+    private var threadTasks: [String: Task<Void, Never>] = [:]
 
     private var roomsHighWater: Date?
     private var subscriptionsHighWater: Date?
     private var roomHighWater: [String: Date] = [:]
+    private var threadHighWater: [String: Date] = [:]
+
+    /// Thread windows live in the message store under a reserved key so they
+    /// never collide with room ids.
+    static func threadKey(_ threadId: String) -> String { "thread/\(threadId)" }
 
     private var state: SyncState = .idle
     private var consecutiveFailures = 0
@@ -80,6 +86,10 @@ actor SyncEngine {
             task.cancel()
         }
         roomTasks = [:]
+        for task in threadTasks.values {
+            task.cancel()
+        }
+        threadTasks = [:]
         setState(.idle)
     }
 
@@ -187,6 +197,61 @@ actor SyncEngine {
         await messageStore.prepend(older: page.messages, in: roomId)
     }
 
+    // MARK: - Thread tier
+
+    /// Loads a thread's replies and starts its own fast poll loop. The window
+    /// is stored under `threadKey`, separate from the room window.
+    func openThread(_ threadId: String, startPolling: Bool = true) async throws {
+        guard threadTasks[threadId] == nil else { return }
+        let page = try await rest.send(API.Chat.getThreadMessages(
+            threadId: threadId, count: config.pageSize, offset: 0))
+        await messageStore.resetRoom(Self.threadKey(threadId), messages: page.messages)
+        var highWater: Date?
+        advance(&highWater, past: page.messages.map { $0._updatedAt ?? $0.ts })
+        threadHighWater[threadId] = highWater ?? clock.now
+
+        guard startPolling else { return }
+        threadTasks[threadId] = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let interval = await self.roomInterval
+                try? await self.clock.sleep(seconds: interval)
+                if Task.isCancelled { return }
+                await self.tickThread(threadId)
+            }
+        }
+    }
+
+    func closeThread(_ threadId: String) async {
+        threadTasks[threadId]?.cancel()
+        threadTasks[threadId] = nil
+        threadHighWater[threadId] = nil
+        await messageStore.trim(Self.threadKey(threadId), to: 0)
+    }
+
+    func tickThread(_ threadId: String) async {
+        guard let since = threadHighWater[threadId] else { return }
+        do {
+            let response = try await rest.send(API.Chat.syncThreadMessages(
+                threadId: threadId, updatedSince: since))
+            let delta = MessageDelta(
+                updated: response.update,
+                deleted: response.remove.map {
+                    DeletedMessage(_id: $0._id, _deletedAt: $0._updatedAt)
+                })
+            var highWater: Date? = since
+            advance(&highWater, past: delta.updated.map { $0._updatedAt ?? $0.ts })
+            advance(&highWater, past: delta.deleted.compactMap(\._deletedAt))
+            threadHighWater[threadId] = highWater
+            if !delta.updated.isEmpty || !delta.deleted.isEmpty {
+                await messageStore.apply(delta: delta, in: Self.threadKey(threadId))
+            }
+            noteTickSuccess()
+        } catch {
+            noteTickFailure(error)
+        }
+    }
+
     // MARK: - Sending (optimistic)
 
     func send(text: String, roomId: String, threadId: String? = nil) async throws {
@@ -195,17 +260,24 @@ actor SyncEngine {
         let optimistic = Message(
             _id: messageId, rid: roomId, msg: text,
             ts: clock.now, u: author, tmid: threadId)
-        await messageStore.insertPending(optimistic, in: roomId)
+        // Thread replies render in the thread window; top-level messages in
+        // the room window.
+        let windowKey = threadId.map(Self.threadKey) ?? roomId
+        await messageStore.insertPending(optimistic, in: windowKey)
         do {
             let sent = try await rest.send(API.Chat.sendMessage(
                 roomId: roomId, text: text, messageId: messageId, threadId: threadId))
             await messageStore.confirm(
-                messageId: messageId, with: sent.message, in: roomId)
+                messageId: messageId, with: sent.message, in: windowKey)
             // A message of ours means an active conversation; catch up now
             // rather than waiting out the poll interval.
-            await tickRoom(roomId)
+            if let threadId {
+                await tickThread(threadId)
+            } else {
+                await tickRoom(roomId)
+            }
         } catch {
-            await messageStore.markFailed(messageId: messageId, in: roomId)
+            await messageStore.markFailed(messageId: messageId, in: windowKey)
             throw error
         }
     }
