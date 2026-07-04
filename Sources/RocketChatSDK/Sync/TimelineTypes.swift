@@ -13,6 +13,11 @@ public struct TimelineEntry: Sendable, Identifiable, Equatable {
     public var message: Message
     public var delivery: DeliveryState
     public var id: String { message._id }
+
+    public init(message: Message, delivery: DeliveryState) {
+        self.message = message
+        self.delivery = delivery
+    }
 }
 
 /// Immutable view of one room's message window, oldest first.

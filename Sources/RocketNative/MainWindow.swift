@@ -5,6 +5,7 @@ struct MainWindow: View {
     @Environment(AppSession.self) private var session
     @State private var model = RoomListModel()
     @State private var selectedRoomId: String?
+    @State private var showGlobalSearch = false
 
     var body: some View {
         NavigationSplitView {
@@ -28,6 +29,18 @@ struct MainWindow: View {
         }
         .toolbar {
             SyncStateBadge(state: model.syncState)
+            Button {
+                showGlobalSearch = true
+            } label: {
+                Label("Go to…", systemImage: "square.grid.2x2")
+            }
+            .keyboardShortcut("k", modifiers: .command)
+            .help("Search channels and people (⌘K)")
+        }
+        .sheet(isPresented: $showGlobalSearch) {
+            GlobalSearchSheet(joinedRooms: model.rooms) { roomId in
+                selectedRoomId = roomId
+            }
         }
     }
 }

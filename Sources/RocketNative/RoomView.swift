@@ -8,12 +8,15 @@ struct RoomView: View {
     let room: RoomSummary
     @State private var model = TimelineModel()
     @State private var draft = ""
+    @State private var activeThread: Message?
+    @State private var showSearch = false
 
     var body: some View {
         VStack(spacing: 0) {
-            TimelineList(entries: model.entries, loadOlder: {
-                await model.loadOlder()
-            })
+            TimelineList(
+                entries: model.entries,
+                loadOlder: { await model.loadOlder() },
+                onOpenThread: { activeThread = $0 })
             Divider()
             ComposerBar(draft: $draft, roomName: room.displayName) {
                 let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -24,6 +27,33 @@ struct RoomView: View {
         }
         .navigationTitle(room.displayName)
         .navigationSubtitle(room.topic ?? "")
+        .toolbar {
+            ToolbarItem {
+                Button {
+                    showSearch = true
+                } label: {
+                    Label("Search in Room", systemImage: "magnifyingglass")
+                }
+                .keyboardShortcut("f", modifiers: .command)
+            }
+        }
+        .inspector(isPresented: .init(
+            get: { activeThread != nil },
+            set: { if !$0 { activeThread = nil } }
+        )) {
+            if let parent = activeThread {
+                ThreadPanel(parent: parent, roomId: room.id) {
+                    activeThread = nil
+                }
+                .inspectorColumnWidth(min: 280, ideal: 340)
+            }
+        }
+        .sheet(isPresented: $showSearch) {
+            RoomSearchSheet(room: room) { parent in
+                showSearch = false
+                activeThread = parent
+            }
+        }
         .task {
             guard let client = session.client else { return }
             await model.open(roomId: room.id, client: client)
@@ -84,6 +114,12 @@ final class TimelineModel {
 struct TimelineList: View {
     let entries: [TimelineEntry]
     let loadOlder: () async -> Void
+    var onOpenThread: ((Message) -> Void)?
+
+    /// Thread replies (tmid set, not echoed to main) live in the thread panel.
+    private var mainEntries: [TimelineEntry] {
+        entries.filter { $0.message.tmid == nil }
+    }
 
     var body: some View {
         ScrollView {
@@ -95,10 +131,12 @@ struct TimelineList: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
 
-                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                let visible = mainEntries
+                ForEach(Array(visible.enumerated()), id: \.element.id) { index, entry in
                     MessageRow(
                         entry: entry,
-                        isGrouped: isGrouped(at: index))
+                        isGrouped: isGrouped(visible, at: index),
+                        onOpenThread: onOpenThread)
                 }
             }
             .padding(.bottom, 8)
@@ -107,10 +145,10 @@ struct TimelineList: View {
     }
 
     /// Consecutive messages from the same author within 5 minutes share one header.
-    private func isGrouped(at index: Int) -> Bool {
+    private func isGrouped(_ list: [TimelineEntry], at index: Int) -> Bool {
         guard index > 0 else { return false }
-        let current = entries[index].message
-        let previous = entries[index - 1].message
+        let current = list[index].message
+        let previous = list[index - 1].message
         return current.u._id == previous.u._id
             && current.t == nil && previous.t == nil
             && current.ts.timeIntervalSince(previous.ts) < 300
@@ -121,6 +159,7 @@ struct MessageRow: View {
     @Environment(AppSession.self) private var session
     let entry: TimelineEntry
     let isGrouped: Bool
+    var onOpenThread: ((Message) -> Void)?
 
     private var message: Message { entry.message }
 
@@ -175,11 +214,39 @@ struct MessageRow: View {
                 messageBody
                 attachmentViews
                 reactionsRow
+                threadIndicator
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 1)
+        .contentShape(Rectangle())
+        .contextMenu {
+            if let onOpenThread {
+                Button("Reply in Thread") { onOpenThread(message) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var threadIndicator: some View {
+        if let count = message.tcount, count > 0, let onOpenThread {
+            Button {
+                onOpenThread(message)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                    Text("\(count) \(count == 1 ? "reply" : "replies")")
+                    if let last = message.tlm {
+                        Text(last, style: .relative)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .font(.caption)
+            }
+            .buttonStyle(.link)
+            .padding(.top, 2)
+        }
     }
 
     @ViewBuilder

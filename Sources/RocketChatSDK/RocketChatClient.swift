@@ -250,6 +250,23 @@ public final class RocketChatClient: Sendable {
             total: response.total ?? response.result.count)
     }
 
+    /// Joins a public channel (e.g. one found via spotlight/directory) and
+    /// triggers a sidebar catch-up so it appears in the room list promptly.
+    @discardableResult
+    public func joinChannel(roomId: String) async throws -> Room {
+        let room = try await rest.send(API.RoomActions.joinChannel(roomId: roomId)).channel
+        await engine.tickSidebar()
+        return room
+    }
+
+    /// Opens (or creates) a direct-message room with a user.
+    @discardableResult
+    public func createDirectMessage(username: String) async throws -> Room {
+        let room = try await rest.send(API.RoomActions.createDM(username: username)).room
+        await engine.tickSidebar()
+        return room
+    }
+
     public func userInfo(username: String) async throws -> UserProfile {
         try await rest.send(API.Users.info(username: username)).user
     }
