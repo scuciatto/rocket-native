@@ -13,6 +13,10 @@ Full plan: `~/.claude/plans/look-ate-rocket-chat-api-piped-crayon.md`
 - Test: `make test` — NOT plain `swift test`; this machine has CLT only (no
   Xcode), so tests need the framework search-path flags in the Makefile.
 - CLI smoke tool: `swift run rc-cli <command>`
+- App: `make app` assembles .build/RocketNative.app without Xcode (SPM release
+  build + App/Info.plist + ad-hoc codesign); `make run-app` also launches it.
+- Local server: `cd IntegrationTests && docker compose up -d` → admin /
+  rc-admin-pass at http://localhost:3000.
 
 ## Conventions
 

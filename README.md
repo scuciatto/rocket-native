@@ -63,11 +63,24 @@ let people = try await client.directory(text: "ana", type: .users)
 Credentials (`client.credentials`) are yours to persist — the app stores them
 in the Keychain; the SDK never writes them anywhere.
 
+## The app
+
+`make run-app` builds and launches **RocketNative.app** (release, ad-hoc
+signed, assembled without Xcode — ~3 MB bundle, ~95 MB RSS at launch).
+
+Features: login with 2FA (TOTP + email code sheet), Keychain session resume,
+live sidebar with unread/mention badges, message timeline with markdown
+rendering (`md` AST), reactions, avatars, image/file attachments, optimistic
+sending with failed-state retry markers, thread inspector (reply counts,
+context menu), ⌘F in-room search, ⌘K global switcher (join channels, start
+DMs), sync-status badge, and slower polling while backgrounded.
+
 ## Development
 
 - Build: `make build` · Test: `make test` (not plain `swift test` — see Makefile)
+- App bundle: `make app` (or `make run-app` to also launch it)
 - Smoke tool: `swift run rc-cli` (login/rooms/history/send/tail/threads/search/spotlight/directory)
 - Integration server: `cd IntegrationTests && docker compose up -d`, then
   `swift run rc-cli login http://localhost:3000 admin` (password `rc-admin-pass`)
 
-Supported servers: Rocket.Chat 6.x/7.x.
+Supported servers: Rocket.Chat 6.x/7.x (validated live against 7.0).
