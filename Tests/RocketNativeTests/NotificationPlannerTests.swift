@@ -30,7 +30,7 @@ private func summary(
         let after = summary(id: "r1", unread: 1, lastMessageId: "m2", lastText: "new one")
         let events = NotificationManager.plan(
             previous: ["r1": before], current: [after],
-            activeRoomId: nil, appActive: true, selfUserId: "uid-9")
+            suppressedRoomId: nil, selfUserId: "uid-9")
         #expect(events.count == 1)
         #expect(events[0].body == "new one")
         #expect(events[0].subtitle == "ana")
@@ -42,23 +42,25 @@ private func summary(
             id: "r1", unread: 1, lastMessageId: "m2", senderId: "uid-9")
         let events = NotificationManager.plan(
             previous: ["r1": before], current: [after],
-            activeRoomId: nil, appActive: true, selfUserId: "uid-9")
+            suppressedRoomId: nil, selfUserId: "uid-9")
         #expect(events.isEmpty)
     }
 
-    @Test func activeRoomSuppressedOnlyWhileAppIsActive() {
+    @Test func visibleRoomIsSuppressed() {
         let before = summary(id: "r1", unread: 0, lastMessageId: "m1")
         let after = summary(id: "r1", unread: 1, lastMessageId: "m2")
 
-        let whileActive = NotificationManager.plan(
+        // Manager resolves "visible" (active account + app frontmost) into
+        // suppressedRoomId; suppressed room stays silent, others don't.
+        let visible = NotificationManager.plan(
             previous: ["r1": before], current: [after],
-            activeRoomId: "r1", appActive: true, selfUserId: "uid-9")
-        #expect(whileActive.isEmpty)
+            suppressedRoomId: "r1", selfUserId: "uid-9")
+        #expect(visible.isEmpty)
 
-        let whileBackgrounded = NotificationManager.plan(
+        let backgrounded = NotificationManager.plan(
             previous: ["r1": before], current: [after],
-            activeRoomId: "r1", appActive: false, selfUserId: "uid-9")
-        #expect(whileBackgrounded.count == 1)
+            suppressedRoomId: nil, selfUserId: "uid-9")
+        #expect(backgrounded.count == 1)
     }
 
     @Test func readStateChurnWithoutNewMessageIsSilent() {
@@ -67,7 +69,7 @@ private func summary(
         let after = summary(id: "r1", unread: 3, lastMessageId: "m1")
         let events = NotificationManager.plan(
             previous: ["r1": before], current: [after],
-            activeRoomId: nil, appActive: true, selfUserId: "uid-9")
+            suppressedRoomId: nil, selfUserId: "uid-9")
         #expect(events.isEmpty)
     }
 
@@ -77,7 +79,7 @@ private func summary(
             id: "d1", type: .directMessage, unread: 1, lastMessageId: "m2")
         let events = NotificationManager.plan(
             previous: ["d1": before], current: [after],
-            activeRoomId: nil, appActive: true, selfUserId: "uid-9")
+            suppressedRoomId: nil, selfUserId: "uid-9")
         #expect(events.count == 1)
         #expect(events[0].title == "ana")
         #expect(events[0].subtitle == nil)
@@ -89,7 +91,7 @@ private func summary(
         let after = summary(id: "r1", unread: 1, lastMessageId: "m2")
         let events = NotificationManager.plan(
             previous: ["r1": before], current: [after],
-            activeRoomId: nil, appActive: true, selfUserId: "uid-9")
+            suppressedRoomId: nil, selfUserId: "uid-9")
         #expect(events.count == 1)
         #expect(!events[0].sound)
     }
@@ -103,16 +105,25 @@ private func summary(
             summary(id: "r2", mentions: 2),                            // mentions
             summary(id: "d1", type: .directMessage, unread: 3),        // DM
         ]
-        #expect(NotificationManager.badgeLabel(for: rooms) == "5")
+        #expect(NotificationManager.dockBadgeLabel(accountRooms: [rooms]) == "5")
+    }
+
+    @Test func aggregatesAcrossServers() {
+        let serverA = [summary(id: "d1", type: .directMessage, unread: 2)]
+        let serverB = [summary(id: "r1", mentions: 1)]
+        #expect(NotificationManager.dockBadgeLabel(
+            accountRooms: [serverA, serverB]) == "3")
     }
 
     @Test func onlyChannelUnreadsShowDot() {
-        let rooms = [summary(id: "r1", unread: 7)]
-        #expect(NotificationManager.badgeLabel(for: rooms) == "•")
+        let serverA = [summary(id: "r1", unread: 7)]
+        let serverB = [summary(id: "r2")]
+        #expect(NotificationManager.dockBadgeLabel(
+            accountRooms: [serverA, serverB]) == "•")
     }
 
     @Test func allReadShowsNothing() {
         let rooms = [summary(id: "r1"), summary(id: "d1", type: .directMessage)]
-        #expect(NotificationManager.badgeLabel(for: rooms) == "")
+        #expect(NotificationManager.dockBadgeLabel(accountRooms: [rooms]) == "")
     }
 }

@@ -19,18 +19,24 @@ struct RocketNativeApp: App {
                 .task { await session.resumeIfPossible() }
         }
         .onChange(of: scenePhase) { _, phase in
-            // Idle apps poll slower; activation triggers a catch-up tick.
-            // Notification suppression tracks the same signal.
-            session.notifications.appActive = phase == .active
-            guard let client = session.client else { return }
-            Task { await client.setAppActive(phase == .active) }
+            // Idle apps poll slower (every live workspace); activation
+            // triggers catch-up ticks. Notification suppression tracks the
+            // same signal.
+            Task { await session.setAppActive(phase == .active) }
         }
         .commands {
             CommandGroup(after: .appSettings) {
-                Button("Log Out") {
-                    Task { await session.logout() }
+                Button("Add Server…") {
+                    session.showAddServer = true
                 }
-                .disabled(session.client == nil)
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(session.accounts.isEmpty)
+
+                if let account = session.activeAccount {
+                    Button("Log Out of \(account.displayName)") {
+                        Task { await session.logout(accountId: account.id) }
+                    }
+                }
             }
         }
     }
@@ -40,10 +46,12 @@ struct RootView: View {
     @Environment(AppSession.self) private var session
 
     var body: some View {
-        switch session.phase {
-        case .active:
+        if !session.accounts.isEmpty {
             MainWindow()
-        default:
+        } else if session.isResuming {
+            ProgressView("Connecting…")
+                .frame(minWidth: 480, minHeight: 420)
+        } else {
             LoginView()
         }
     }
