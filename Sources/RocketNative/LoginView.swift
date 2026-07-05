@@ -3,6 +3,9 @@ import RocketChatSDK
 
 struct LoginView: View {
     @Environment(AppSession.self) private var session
+    @Environment(\.dismiss) private var dismiss
+    /// Presented as the add-server sheet (vs full-window first login).
+    var isSheet = false
 
     @State private var server = ""
     @State private var username = ""
@@ -14,7 +17,7 @@ struct LoginView: View {
     }
 
     private var isBusy: Bool {
-        if case .loggingIn = session.phase { return true }
+        if case .loggingIn = session.loginFlow { return true }
         return false
     }
 
@@ -26,7 +29,7 @@ struct LoginView: View {
                     .foregroundStyle(.tint)
                 Text("Rocket.Chat")
                     .font(.title.weight(.semibold))
-                Text("Sign in to your workspace")
+                Text(isSheet ? "Add another workspace" : "Sign in to your workspace")
                     .foregroundStyle(.secondary)
             }
 
@@ -53,22 +56,28 @@ struct LoginView: View {
                     .foregroundStyle(.red)
             }
 
-            Button(action: submit) {
-                if isBusy {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Sign In").frame(minWidth: 80)
+            HStack {
+                if isSheet {
+                    Button("Cancel") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
                 }
+                Button(action: submit) {
+                    if isBusy {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Sign In").frame(minWidth: 80)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(isBusy || server.isEmpty || username.isEmpty || password.isEmpty)
             }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.defaultAction)
-            .disabled(isBusy || server.isEmpty || username.isEmpty || password.isEmpty)
         }
         .padding(40)
         .frame(minWidth: 480, minHeight: 420)
         .onAppear {
-            server = session.serverURLString
-            focus = .username
+            server = isSheet ? "" : session.serverURLString
+            focus = isSheet ? .server : .username
         }
         .sheet(isPresented: .constant(isTwoFactor)) {
             TwoFactorSheet()
@@ -76,7 +85,7 @@ struct LoginView: View {
     }
 
     private var isTwoFactor: Bool {
-        if case .twoFactor = session.phase { return true }
+        if case .twoFactor = session.loginFlow { return true }
         return false
     }
 
@@ -95,7 +104,7 @@ struct TwoFactorSheet: View {
     @FocusState private var codeFocused: Bool
 
     private var challenge: TwoFactorChallenge? {
-        if case .twoFactor(let challenge) = session.phase { return challenge }
+        if case .twoFactor(let challenge) = session.loginFlow { return challenge }
         return nil
     }
 

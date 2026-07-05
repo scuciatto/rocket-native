@@ -2,68 +2,101 @@ import AppKit
 import UserNotifications
 import RocketChatSDK
 
-/// Local notifications + Dock badge, driven entirely by the sidebar poll:
-/// each room-list snapshot is diffed against the previous one, so a grown
-/// unread/mention count with a fresh last message becomes a banner. This is
-/// the REST-only design — there is no push channel to subscribe to.
+/// Local notifications + Dock badge across all signed-in workspaces, driven
+/// entirely by each account's sidebar poll: room-list snapshots are diffed
+/// against the previous one, so a grown unread/mention count with a fresh
+/// last message becomes a banner. This is the REST-only design — there is no
+/// push channel to subscribe to.
 @MainActor
 @Observable
 final class NotificationManager {
-    /// Room the user is currently viewing — its messages never notify while
-    /// the app is frontmost.
+    struct PendingSelection: Equatable {
+        var accountId: String
+        var roomId: String
+    }
+
+    /// Room the user is currently viewing (on the active account) — its
+    /// messages never notify while the app is frontmost.
+    var activeAccountId: String?
     var activeRoomId: String?
     var appActive = true
     /// Set when the user clicks a notification; MainWindow consumes it to
-    /// select the room.
-    var pendingRoomSelection: String?
+    /// switch to the account and select the room.
+    var pendingSelection: PendingSelection?
 
-    private var selfUserId: String?
-    private var observation: Task<Void, Never>?
-    private var previousByRoom: [String: RoomSummary] = [:]
+    private var tasks: [String: Task<Void, Never>] = [:]
+    private var roomsByAccount: [String: [RoomSummary]] = [:]
     private let delegate = Delegate()
 
     init() {
-        delegate.onRoomSelected = { [weak self] roomId in
-            Task { @MainActor in self?.pendingRoomSelection = roomId }
+        delegate.onSelected = { [weak self] accountId, roomId in
+            Task { @MainActor in
+                self?.pendingSelection = PendingSelection(
+                    accountId: accountId, roomId: roomId)
+            }
         }
         UNUserNotificationCenter.current().delegate = delegate
     }
 
-    func start(client: RocketChatClient, selfUserId: String) {
-        stop()
-        self.selfUserId = selfUserId
+    func register(accountId: String, client: RocketChatClient, selfUserId: String) {
+        unregister(accountId: accountId)
         UNUserNotificationCenter.current().requestAuthorization(
             options: [.alert, .sound]) { _, _ in }
-        observation = Task { [weak self] in
+        tasks[accountId] = Task { [weak self] in
+            var previous: [String: RoomSummary] = [:]
             var isFirstSnapshot = true
             for await rooms in await client.roomListUpdates() {
                 guard let self else { return }
-                self.updateBadge(rooms)
-                let previous = self.previousByRoom
-                self.previousByRoom = Dictionary(
-                    uniqueKeysWithValues: rooms.map { ($0.id, $0) })
+                self.roomsByAccount[accountId] = rooms
+                self.updateDockBadge()
+                let before = previous
+                previous = Dictionary(uniqueKeysWithValues: rooms.map { ($0.id, $0) })
                 // The first snapshot is baseline state, not news.
                 if isFirstSnapshot {
                     isFirstSnapshot = false
                     continue
                 }
+                let visibleRoomId = (self.appActive && self.activeAccountId == accountId)
+                    ? self.activeRoomId : nil
                 let events = Self.plan(
-                    previous: previous, current: rooms,
-                    activeRoomId: self.activeRoomId,
-                    appActive: self.appActive,
-                    selfUserId: self.selfUserId)
+                    previous: before, current: rooms,
+                    suppressedRoomId: visibleRoomId,
+                    selfUserId: selfUserId)
                 for event in events {
-                    self.post(event)
+                    self.post(event, accountId: accountId)
                 }
             }
         }
     }
 
-    func stop() {
-        observation?.cancel()
-        observation = nil
-        previousByRoom = [:]
+    func unregister(accountId: String) {
+        tasks[accountId]?.cancel()
+        tasks[accountId] = nil
+        roomsByAccount[accountId] = nil
+        updateDockBadge()
+    }
+
+    func stopAll() {
+        for accountId in tasks.keys {
+            tasks[accountId]?.cancel()
+        }
+        tasks = [:]
+        roomsByAccount = [:]
         NSApp.dockTile.badgeLabel = ""
+    }
+
+    // MARK: - Per-account badge (for the server rail)
+
+    struct AccountBadge: Equatable {
+        var personal: Int
+        var hasUnread: Bool
+    }
+
+    func badge(for accountId: String) -> AccountBadge {
+        let rooms = roomsByAccount[accountId] ?? []
+        return AccountBadge(
+            personal: Self.personalCount(rooms),
+            hasUnread: rooms.contains { $0.unread > 0 || $0.alert })
     }
 
     // MARK: - Planning (pure, kept separate for testability)
@@ -77,9 +110,11 @@ final class NotificationManager {
     }
 
     /// Decides which rooms deserve a banner given two consecutive snapshots.
+    /// `suppressedRoomId` is the room currently on screen, when its account
+    /// is the visible one and the app is frontmost.
     static func plan(
         previous: [String: RoomSummary], current: [RoomSummary],
-        activeRoomId: String?, appActive: Bool, selfUserId: String?
+        suppressedRoomId: String?, selfUserId: String?
     ) -> [Event] {
         current.compactMap { room in
             guard let last = room.lastMessage else { return nil }
@@ -91,7 +126,7 @@ final class NotificationManager {
             guard last.id != before?.lastMessage?.id else { return nil }
             // Never for own messages, and not for the room on screen.
             guard last.u._id != selfUserId else { return nil }
-            if appActive && room.id == activeRoomId { return nil }
+            guard room.id != suppressedRoomId else { return nil }
 
             let sender = last.u.name ?? last.u.username ?? "Someone"
             let text = last.msg.isEmpty ? "Sent an attachment" : String(last.msg.prefix(140))
@@ -105,23 +140,31 @@ final class NotificationManager {
         }
     }
 
-    /// Dock badge: things that need *you* (mentions + DM unreads) as a
-    /// number; a dot when only channel chatter is unread.
-    static func badgeLabel(for rooms: [RoomSummary]) -> String {
-        let personal = rooms.reduce(0) { total, room in
+    /// Dock badge across all workspaces: things that need *you* (mentions +
+    /// DM unreads) as a number; a dot when only channel chatter is unread.
+    static func dockBadgeLabel(accountRooms: [[RoomSummary]]) -> String {
+        let personal = accountRooms.reduce(0) { $0 + personalCount($1) }
+        if personal > 0 { return "\(personal)" }
+        let anyUnread = accountRooms.contains { rooms in
+            rooms.contains { $0.unread > 0 || $0.alert }
+        }
+        return anyUnread ? "•" : ""
+    }
+
+    private static func personalCount(_ rooms: [RoomSummary]) -> Int {
+        rooms.reduce(0) { total, room in
             total + room.mentions + (room.type == .directMessage ? room.unread : 0)
         }
-        if personal > 0 { return "\(personal)" }
-        return rooms.contains { $0.unread > 0 || $0.alert } ? "•" : ""
     }
 
     // MARK: - Delivery
 
-    private func updateBadge(_ rooms: [RoomSummary]) {
-        NSApp.dockTile.badgeLabel = Self.badgeLabel(for: rooms)
+    private func updateDockBadge() {
+        NSApp.dockTile.badgeLabel = Self.dockBadgeLabel(
+            accountRooms: Array(roomsByAccount.values))
     }
 
-    private func post(_ event: Event) {
+    private func post(_ event: Event, accountId: String) {
         let content = UNMutableNotificationContent()
         content.title = event.title
         if let subtitle = event.subtitle {
@@ -131,8 +174,8 @@ final class NotificationManager {
         if event.sound {
             content.sound = .default
         }
-        content.userInfo = ["roomId": event.roomId]
-        content.threadIdentifier = event.roomId
+        content.userInfo = ["roomId": event.roomId, "accountId": accountId]
+        content.threadIdentifier = "\(accountId)/\(event.roomId)"
         let request = UNNotificationRequest(
             identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
@@ -140,7 +183,7 @@ final class NotificationManager {
 
     /// UNUserNotificationCenter's delegate must be an NSObject.
     private final class Delegate: NSObject, UNUserNotificationCenterDelegate {
-        var onRoomSelected: (@Sendable (String) -> Void)?
+        var onSelected: (@Sendable (String, String) -> Void)?
 
         func userNotificationCenter(
             _ center: UNUserNotificationCenter,
@@ -153,9 +196,10 @@ final class NotificationManager {
             _ center: UNUserNotificationCenter,
             didReceive response: UNNotificationResponse
         ) async {
-            if let roomId = response.notification.request.content
-                .userInfo["roomId"] as? String {
-                onRoomSelected?(roomId)
+            let userInfo = response.notification.request.content.userInfo
+            if let roomId = userInfo["roomId"] as? String,
+               let accountId = userInfo["accountId"] as? String {
+                onSelected?(accountId, roomId)
             }
         }
     }

@@ -3,16 +3,55 @@ import RocketChatSDK
 
 struct MainWindow: View {
     @Environment(AppSession.self) private var session
+
+    var body: some View {
+        @Bindable var session = session
+        HStack(spacing: 0) {
+            // Only show the rail once a second server could matter; a single
+            // server keeps the uncluttered v1 layout.
+            if session.accounts.count > 1 {
+                ServerRail()
+                Divider()
+            }
+            if let account = session.activeAccount {
+                WorkspaceView(account: account)
+                    .id(account.id)   // fresh models per workspace
+            }
+        }
+        .sheet(isPresented: $session.showAddServer) {
+            LoginView(isSheet: true)
+        }
+        .onChange(of: session.activeAccountId) { _, accountId in
+            session.notifications.activeAccountId = accountId
+            session.notifications.activeRoomId = session.activeAccount?.selectedRoomId
+        }
+        .onChange(of: session.notifications.pendingSelection) { _, selection in
+            // A clicked notification routes to its workspace and room.
+            guard let selection else { return }
+            session.activeAccountId = selection.accountId
+            session.accounts.first { $0.id == selection.accountId }?
+                .selectedRoomId = selection.roomId
+            session.notifications.pendingSelection = nil
+        }
+        .task {
+            session.notifications.activeAccountId = session.activeAccount?.id
+        }
+    }
+}
+
+/// One workspace's split view: sidebar (room list) + room detail.
+struct WorkspaceView: View {
+    @Environment(AppSession.self) private var session
+    @Bindable var account: ServerAccount
     @State private var model = RoomListModel()
-    @State private var selectedRoomId: String?
     @State private var showGlobalSearch = false
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(rooms: model.rooms, selection: $selectedRoomId)
+            SidebarView(rooms: model.rooms, selection: $account.selectedRoomId)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240)
         } detail: {
-            if let roomId = selectedRoomId,
+            if let roomId = account.selectedRoomId,
                let room = model.rooms.first(where: { $0.id == roomId }) {
                 RoomView(room: room)
                     .id(roomId)   // fresh view (and handle) per room
@@ -24,21 +63,13 @@ struct MainWindow: View {
             }
         }
         .task {
-            guard let client = session.client else { return }
-            await model.observe(client)
+            await model.observe(account.client)
         }
-        .onChange(of: selectedRoomId) { _, roomId in
+        .onChange(of: account.selectedRoomId) { _, roomId in
             session.notifications.activeRoomId = roomId
         }
-        .onChange(of: session.notifications.pendingRoomSelection) { _, roomId in
-            // A clicked notification routes to its room.
-            if let roomId {
-                selectedRoomId = roomId
-                session.notifications.pendingRoomSelection = nil
-            }
-        }
         .toolbar {
-            if session.cacheUnavailable {
+            if account.cacheUnavailable {
                 Label("No offline cache", systemImage: "externaldrive.badge.exclamationmark")
                     .foregroundStyle(.orange)
                     .help("The local message cache could not be opened; "
@@ -55,9 +86,10 @@ struct MainWindow: View {
         }
         .sheet(isPresented: $showGlobalSearch) {
             GlobalSearchSheet(joinedRooms: model.rooms) { roomId in
-                selectedRoomId = roomId
+                account.selectedRoomId = roomId
             }
         }
+        .navigationTitle(account.displayName)
     }
 }
 

@@ -17,9 +17,11 @@ Roughly ordered by expected value.
 3. **Push transport** — when Rocket.Chat ships the streamer's REST-era
    replacement, slot it in behind the `SyncEngine` seam; polling remains the
    fallback. Removes the 2–3 s latency and enables typing indicators.
-4. **Multi-server/workspace UI** — the SDK is instance-based already
-   (`RocketChatClient` per server); this is account-switcher UI + per-server
-   Keychain items (already keyed by host).
+4. ~~**Multi-server/workspace UI**~~ — **done** (feature/multi-server):
+   vertical server rail (lateral tabs; horizontal space reserved for future
+   conversation tabs), all accounts live concurrently, aggregated
+   notifications/Dock badge, ⌘1…⌘9 switching, add-server sheet, per-server
+   logout. Rail hidden with a single server.
 5. **File upload** — `rooms.upload` endpoint + drag-and-drop/paste in the
    composer.
 
