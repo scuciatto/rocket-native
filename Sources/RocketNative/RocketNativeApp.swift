@@ -20,6 +20,8 @@ struct RocketNativeApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             // Idle apps poll slower; activation triggers a catch-up tick.
+            // Notification suppression tracks the same signal.
+            session.notifications.appActive = phase == .active
             guard let client = session.client else { return }
             Task { await client.setAppActive(phase == .active) }
         }

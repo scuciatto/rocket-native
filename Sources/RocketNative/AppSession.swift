@@ -20,6 +20,7 @@ final class AppSession {
     /// True when the SQLite cache could not be opened and the session is
     /// running in-memory — surfaced in the UI instead of failing silently.
     private(set) var cacheUnavailable = false
+    let notifications = NotificationManager()
     var loginError: String?
 
     /// Last used server, prefilled on the login form.
@@ -123,6 +124,7 @@ final class AppSession {
     }
 
     func logout() async {
+        notifications.stop()
         let cacheFile = client?.cacheFileURL
         if let client {
             try? await client.logout()
@@ -156,6 +158,7 @@ final class AppSession {
         self.profile = profile
         self.phase = .active
         await client.startSync()
+        notifications.start(client: client, selfUserId: profile._id)
     }
 
     /// Authenticated URL for a server-hosted file (uploads, image previews).

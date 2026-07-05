@@ -9,9 +9,11 @@ Roughly ordered by expected value.
    SQLite-backed stores via the system `libsqlite3` (no GRDB dependency needed),
    persisted sync marks, per-host db enabled by the app and cleared on logout.
    Follow-up noted below (#19).
-2. **Notifications** — local notifications from the sidebar poll
-   (`stream-notify-user` is streamer-only, but `subscriptions.get` deltas
-   carry unread/mention changes). Badge count on the Dock icon.
+2. ~~**Notifications**~~ — **done** (feature/notifications): snapshot-diff
+   planner over the sidebar poll drives banners (sender/room/preview, sound
+   for DMs and mentions, suppressed for the on-screen room) and the Dock
+   badge (personal count, dot for channel chatter); clicking a banner opens
+   the room.
 3. **Push transport** — when Rocket.Chat ships the streamer's REST-era
    replacement, slot it in behind the `SyncEngine` seam; polling remains the
    fallback. Removes the 2–3 s latency and enables typing indicators.
