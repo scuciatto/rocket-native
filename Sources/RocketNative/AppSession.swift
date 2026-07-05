@@ -244,6 +244,7 @@ final class AppSession {
         activeAccountId = account.id
         persistServerList()
         await account.client.startSync()
+        await account.client.enablePushSignals()
         notifications.register(
             accountId: account.id, client: account.client,
             selfUserId: account.profile._id)

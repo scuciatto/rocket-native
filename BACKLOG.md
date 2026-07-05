@@ -14,9 +14,11 @@ Roughly ordered by expected value.
    for DMs and mentions, suppressed for the on-screen room) and the Dock
    badge (personal count, dot for channel chatter); clicking a banner opens
    the room.
-3. **Push transport** — when Rocket.Chat ships the streamer's REST-era
-   replacement, slot it in behind the `SyncEngine` seam; polling remains the
-   fallback. Removes the 2–3 s latency and enables typing indicators.
+3. ~~**Push transport**~~ — **done** (feature/push-signal): `PushSignaling`
+   seam in the engine + opt-in `StreamerSignalTransport` bell (streamer used
+   for wake-up hints only, zero payloads; REST stays the data path; polling
+   stretches to a safety net while healthy). 0.17 s live delivery vs the
+   2.5 s poll bound. Typing indicators remain out (would require payloads).
 4. ~~**Multi-server/workspace UI**~~ — **done** (feature/multi-server):
    vertical server rail (lateral tabs; horizontal space reserved for future
    conversation tabs), all accounts live concurrently, aggregated

@@ -23,10 +23,17 @@ sleep or network loss is also the recovery path — there is no separate
 reconnect logic. The poller honors `x-ratelimit-*` headers and backs off on
 429s.
 
-**Known v1 limitations** (consequences of REST-only): update latency is a few
-seconds instead of instant, and there are no typing indicators (streamer-only
-feature today). The sync engine is a seam — a push transport can replace
-polling later without changing the SDK's public API.
+**Known v1 limitations** (consequences of REST-only): there are no typing
+indicators (streamer-only feature today).
+
+**Push signals (opt-in).** `client.enablePushSignals()` attaches a *bell*:
+the legacy realtime WebSocket subscribed to the two user-level notify streams
+and reduced to "something changed" hints — it never carries message data, and
+every payload still flows through REST delta sync. Signals trigger immediate
+ticks (sub-second updates); polling continues at the idle cadence as a safety
+net, so a failed socket degrades silently to plain polling. When Rocket.Chat
+ships the streamer's REST-era replacement, it becomes another `PushSignaling`
+implementation and `StreamerSignalTransport` gets deleted.
 
 **Offline cache.** Stores are backed by SQLite (system `libsqlite3`, still
 zero third-party dependencies) when the client is created with
