@@ -229,6 +229,11 @@ func runSend(room nameOrId: String, text: String) async {
 func runTail(room nameOrId: String) async {
     let (client, _) = await authenticatedClient()
     await client.startSync()
+    // RC_PUSH=1 enables the push bell: instant wake-ups, polling as safety net.
+    if ProcessInfo.processInfo.environment["RC_PUSH"] == "1" {
+        await client.enablePushSignals()
+        print("(push signals enabled)")
+    }
     let room = await resolveRoom(client, nameOrId)
     do {
         let handle = try await client.openRoom(room.id)

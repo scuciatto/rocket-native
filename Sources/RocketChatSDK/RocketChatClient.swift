@@ -98,6 +98,22 @@ public final class RocketChatClient: Sendable {
         await engine.setAppActive(active)
     }
 
+    /// Opt-in push bell: uses the legacy realtime WebSocket **only** as a
+    /// "something changed" signal — every payload still flows through REST
+    /// delta sync, and polling continues as a safety net. If the socket
+    /// can't connect, behavior degrades silently to plain polling.
+    public func enablePushSignals() async {
+        let auth = self.auth
+        let transport = StreamerSignalTransport(
+            serverURL: serverURL,
+            credentials: { await auth.credentials })
+        await engine.attachPushSignals(transport)
+    }
+
+    public func disablePushSignals() async {
+        await engine.detachPushSignals()
+    }
+
     /// Sidebar snapshots: yields current state immediately, then on change.
     public func roomListUpdates() async -> AsyncStream<[RoomSummary]> {
         await engine.roomStore.updates()
@@ -259,7 +275,7 @@ public final class RocketChatClient: Sendable {
     /// Opens a live view into a thread: loads its replies and starts a fast
     /// poll loop. Call `close()` on the handle when done.
     public func openThread(_ threadId: String, in roomId: String) async throws -> ThreadHandle {
-        try await engine.openThread(threadId)
+        try await engine.openThread(threadId, roomId: roomId)
         return ThreadHandle(threadId: threadId, roomId: roomId, engine: engine, client: self)
     }
 

@@ -38,6 +38,14 @@ actor SyncEngine {
     private var subscriptionsHighWater: Date?
     private var roomHighWater: [String: Date] = [:]
     private var threadHighWater: [String: Date] = [:]
+    /// Open thread → its room, for routing room-level push signals.
+    private var threadRooms: [String: String] = [:]
+
+    private var pushTask: Task<Void, Never>?
+    private var pushTransport: PushSignaling?
+    /// While the push transport is healthy, polls stretch to a safety net —
+    /// signals do the waking, ticks stay REST.
+    private(set) var pushHealthy = false
 
     /// Thread windows live in the message store under a reserved key so they
     /// never collide with room ids.
@@ -83,7 +91,64 @@ actor SyncEngine {
         }
     }
 
+    // MARK: - Push signals
+
+    /// Attaches a push transport. Purely advisory: signals trigger the same
+    /// REST ticks the poller runs; polling continues as a safety net.
+    func attachPushSignals(_ transport: PushSignaling) {
+        detachPushSignals()
+        pushTransport = transport
+        pushTask = Task { [weak self] in
+            guard let transport = await self?.pushTransport else { return }
+            for await signal in await transport.signals() {
+                guard let self else { return }
+                await self.handle(signal)
+            }
+            await self?.setPushHealthy(false)
+        }
+    }
+
+    func detachPushSignals() {
+        pushTask?.cancel()
+        pushTask = nil
+        let transport = pushTransport
+        pushTransport = nil
+        pushHealthy = false
+        Task { await transport?.stop() }
+    }
+
+    private func handle(_ signal: PushSignal) async {
+        switch signal {
+        case .connected(let healthy):
+            let cameUp = healthy && !pushHealthy
+            pushHealthy = healthy
+            if cameUp {
+                // Catch up on anything missed while the bell was down.
+                await tickSidebar()
+                for roomId in roomTasks.keys {
+                    await tickRoom(roomId)
+                }
+            }
+        case .sidebarChanged:
+            await tickSidebar()
+        case .roomActivity(let roomId):
+            // "Open" = has an initial-load high-water mark (poll task
+            // existence would miss rooms opened without polling).
+            if roomHighWater[roomId] != nil {
+                await tickRoom(roomId)
+            }
+            for (threadId, threadRoom) in threadRooms where threadRoom == roomId {
+                await tickThread(threadId)
+            }
+        }
+    }
+
+    private func setPushHealthy(_ healthy: Bool) {
+        pushHealthy = healthy
+    }
+
     func stop() {
+        detachPushSignals()
         sidebarTask?.cancel()
         sidebarTask = nil
         for task in roomTasks.values {
@@ -225,8 +290,11 @@ actor SyncEngine {
 
     /// Loads a thread's replies and starts its own fast poll loop. The window
     /// is stored under `threadKey`, separate from the room window.
-    func openThread(_ threadId: String, startPolling: Bool = true) async throws {
+    func openThread(_ threadId: String, roomId: String? = nil, startPolling: Bool = true) async throws {
         guard threadTasks[threadId] == nil else { return }
+        if let roomId {
+            threadRooms[threadId] = roomId
+        }
         let page = try await rest.send(API.Chat.getThreadMessages(
             threadId: threadId, count: config.pageSize, offset: 0))
         await messageStore.resetRoom(Self.threadKey(threadId), messages: page.messages)
@@ -250,6 +318,7 @@ actor SyncEngine {
         threadTasks[threadId]?.cancel()
         threadTasks[threadId] = nil
         threadHighWater[threadId] = nil
+        threadRooms[threadId] = nil
         await messageStore.trim(Self.threadKey(threadId), to: 0)
     }
 
@@ -350,11 +419,13 @@ actor SyncEngine {
     // MARK: - Helpers
 
     private var sidebarInterval: TimeInterval {
-        appActive ? config.sidebarActiveInterval : config.sidebarIdleInterval
+        pushHealthy ? config.sidebarIdleInterval
+            : appActive ? config.sidebarActiveInterval : config.sidebarIdleInterval
     }
 
     private var roomInterval: TimeInterval {
-        appActive ? config.roomActiveInterval : config.roomIdleInterval
+        pushHealthy ? config.roomIdleInterval
+            : appActive ? config.roomActiveInterval : config.roomIdleInterval
     }
 
     private func advance(_ mark: inout Date?, past dates: [Date]) {

@@ -2,8 +2,12 @@
 
 Native macOS Rocket.Chat client: a zero-dependency Swift SDK (`RocketChatSDK`)
 plus a SwiftUI app. **REST-only by explicit decision** — the realtime/DDP
-streamer API is deprecated and must not be used. Live updates come from
+streamer API is deprecated and must not carry data. Live updates come from
 delta-sync polling (`chat.syncMessages`, `subscriptions.get?updatedSince=`).
+One sanctioned exception: `StreamerSignalTransport` (opt-in via
+`enablePushSignals()`) uses the streamer WebSocket purely as a "something
+changed" bell that triggers REST ticks — no payloads are decoded from it,
+and it is the single file to delete when the REST-era replacement ships.
 
 Full plan: `~/.claude/plans/look-ate-rocket-chat-api-piped-crayon.md`
 Backlog: `BACKLOG.md`, mirrored to the app's default GitHub project:
