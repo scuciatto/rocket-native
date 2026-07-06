@@ -791,34 +791,50 @@ struct ComposerBar: View {
     var onAttach: (([URL]) -> Void)?
 
     @State private var showFilePicker = false
+    @State private var showPreview = false
+    @FocusState private var isFocused: Bool
+
+    private var hasDraft: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
-        HStack(spacing: 8) {
-            if onAttach != nil {
+        VStack(spacing: 0) {
+            if showPreview, hasDraft {
+                previewPane
+                Divider()
+            }
+            HStack(spacing: 8) {
+                if onAttach != nil {
+                    Button {
+                        showFilePicker = true
+                    } label: {
+                        Image(systemName: "paperclip")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Attach a file…")
+                }
+                TextField("Message \(roomName)", text: $draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...6)
+                    .focused($isFocused)
+                    .onSubmit {
+                        Task { await onSend() }
+                    }
+                if isFocused || hasDraft {
+                    formattingStrip
+                }
                 Button {
-                    showFilePicker = true
+                    Task { await onSend() }
                 } label: {
-                    Image(systemName: "paperclip")
+                    Image(systemName: "paperplane.fill")
                 }
                 .buttonStyle(.borderless)
-                .help("Attach a file…")
+                .disabled(!hasDraft)
+                .keyboardShortcut(.return, modifiers: [])
             }
-            TextField("Message \(roomName)", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...6)
-                .onSubmit {
-                    Task { await onSend() }
-                }
-            Button {
-                Task { await onSend() }
-            } label: {
-                Image(systemName: "paperplane.fill")
-            }
-            .buttonStyle(.borderless)
-            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .keyboardShortcut(.return, modifiers: [])
+            .padding(10)
         }
-        .padding(10)
         .background(.bar)
         .fileImporter(
             isPresented: $showFilePicker,
@@ -829,5 +845,58 @@ struct ComposerBar: View {
                 onAttach?(urls)
             }
         }
+    }
+
+    /// Compact formatting buttons, shown only while composing to keep the
+    /// bar unbloated. Markdown always passes through even without these.
+    private var formattingStrip: some View {
+        HStack(spacing: 2) {
+            formatButton(.bold)
+                .keyboardShortcut("b", modifiers: .command)
+            formatButton(.italic)
+                .keyboardShortcut("i", modifiers: .command)
+            formatButton(.strike)
+                .keyboardShortcut("x", modifiers: [.command, .shift])
+            formatButton(.inlineCode)
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+            Button {
+                ComposerMarkdown.insertCodeFence(fallback: $draft)
+            } label: {
+                Image(systemName: "curlybraces")
+            }
+            .buttonStyle(.borderless)
+            .help("Code block (⌘⌥⇧C)")
+            .keyboardShortcut("c", modifiers: [.command, .option, .shift])
+            Button {
+                showPreview.toggle()
+            } label: {
+                Image(systemName: showPreview ? "eye.fill" : "eye")
+            }
+            .buttonStyle(.borderless)
+            .help("Preview formatting (⌘⇧P)")
+            .keyboardShortcut("p", modifiers: [.command, .shift])
+        }
+        .foregroundStyle(.secondary)
+    }
+
+    private func formatButton(_ style: ComposerMarkdown.Style) -> some View {
+        Button {
+            ComposerMarkdown.toggle(style, fallback: $draft)
+        } label: {
+            Image(systemName: style.icon)
+        }
+        .buttonStyle(.borderless)
+        .help(style.help)
+    }
+
+    private var previewPane: some View {
+        ScrollView {
+            Text(ComposerMarkdown.preview(of: draft))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+        }
+        .frame(maxHeight: 120)
+        .background(Color.secondary.opacity(0.05))
     }
 }

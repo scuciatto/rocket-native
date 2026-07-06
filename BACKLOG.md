@@ -73,6 +73,12 @@ Roughly ordered by expected value.
     add ⌘B/⌘I/⌘⇧X selection wrapping, a code-fence helper, and optionally a
     live preview toggle. Note: optimistic sends show raw text until the
     server echo arrives with the parsed `md` AST (sub-second).
+17. **Unread separator / mark-unread** — rooms mark read on open+send;
+    there's no "new messages" divider or manual mark-unread.
+18. ~~**Composer markdown authoring**~~ — **done** (feature/composer-markdown):
+    ⌘B/⌘I/⌘⇧X/⌘⇧C selection wrapping (with unwrap toggle) via the focused
+    field editor, code-fence helper, and a preview toggle using Foundation's
+    CommonMark parser. Formatting strip appears only while composing.
 19. **Cache follow-ups** — edits/deletes that happen while the client is
     offline are only reconciled for the newest page of each room (room-tier
     sync resumes from the fetched page, not the persisted mark, to avoid
