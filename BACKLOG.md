@@ -24,8 +24,10 @@ Roughly ordered by expected value.
    conversation tabs), all accounts live concurrently, aggregated
    notifications/Dock badge, ⌘1…⌘9 switching, add-server sheet, per-server
    logout. Rail hidden with a single server.
-5. **File upload** — `rooms.media/:rid` endpoint (NOT `rooms.upload`, which
-   was removed in RC 8.0) + drag-and-drop/paste in the composer.
+5. ~~**File upload**~~ — **done** (feature/file-upload): `rooms.media` +
+   `rooms.mediaConfirm` two-step flow (works on 7.x and 8.x), attach button
+   and drag-and-drop in the app, thread uploads via `tmid`. Paste-image
+   support remains a follow-up.
 
 ## Open questions from the plan (still open)
 

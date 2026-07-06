@@ -87,9 +87,10 @@ signed, assembled without Xcode — ~3 MB bundle, ~95 MB RSS at launch).
 Features: login with 2FA (TOTP + email code sheet), Keychain session resume,
 live sidebar with unread/mention badges, message timeline with markdown
 rendering (`md` AST), reactions, avatars, image/file attachments, optimistic
-sending with failed-state retry markers, thread inspector (reply counts,
-context menu), ⌘F in-room search, ⌘K global switcher (join channels, start
-DMs), sync-status badge, and slower polling while backgrounded.
+sending with failed-state retry markers, file upload (attach button +
+drag-and-drop, via rooms.media), thread inspector (reply counts, context
+menu), ⌘F in-room search, ⌘K global switcher (join channels, start DMs),
+sync-status badge, and slower polling while backgrounded.
 
 ## Development
 

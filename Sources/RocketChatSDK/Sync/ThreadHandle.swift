@@ -47,6 +47,18 @@ public final class ThreadHandle: Sendable {
         await engine.tickThread(threadId)
     }
 
+    /// Uploads a file as a thread reply and catches up immediately.
+    @discardableResult
+    public func upload(
+        _ file: UploadableFile, text: String? = nil, description: String? = nil
+    ) async throws -> Message? {
+        let message = try await client.uploadFile(
+            file, roomId: roomId, text: text, description: description,
+            threadId: threadId)
+        await engine.tickThread(threadId)
+        return message
+    }
+
     public func close() async {
         await engine.closeThread(threadId)
     }

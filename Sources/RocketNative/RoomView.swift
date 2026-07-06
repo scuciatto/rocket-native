@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import RocketChatSDK
 
 /// One room's timeline + composer. Owns the SDK `RoomHandle` for its
@@ -44,23 +45,41 @@ struct RoomView: View {
                     },
                     delete: { deleteCandidate = $0 }))
             Divider()
+            if !model.uploadingNames.isEmpty {
+                UploadingBanner(names: model.uploadingNames)
+            }
+            if let uploadError = model.uploadError {
+                Text(uploadError)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .padding(.vertical, 4)
+            }
             if let editing = editingMessage {
                 EditingBanner(message: editing) {
                     editingMessage = nil
                     draft = ""
                 }
             }
-            ComposerBar(draft: $draft, roomName: room.displayName) {
-                let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { return }
-                draft = ""
-                if let editing = editingMessage {
-                    editingMessage = nil
-                    await model.edit(messageId: editing._id, text: text)
-                } else {
-                    await model.send(text)
-                }
-            }
+            ComposerBar(
+                draft: $draft, roomName: room.displayName,
+                onSend: {
+                    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !text.isEmpty else { return }
+                    draft = ""
+                    if let editing = editingMessage {
+                        editingMessage = nil
+                        await model.edit(messageId: editing._id, text: text)
+                    } else {
+                        await model.send(text)
+                    }
+                },
+                onAttach: { urls in
+                    Task { await model.upload(urls: urls) }
+                })
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            Task { await model.upload(urls: urls) }
+            return true
         }
         .confirmationDialog(
             "Delete this message?",
@@ -173,6 +192,46 @@ final class TimelineModel {
 
     func loadOlder() async {
         try? await handle?.loadOlder()
+    }
+
+    // MARK: - Uploads
+
+    private(set) var uploadingNames: [String] = []
+    var uploadError: String?
+
+    func upload(urls: [URL]) async {
+        guard let handle else { return }
+        uploadError = nil
+        for url in urls {
+            guard let file = Self.readFile(url) else {
+                uploadError = "Could not read “\(url.lastPathComponent)”."
+                continue
+            }
+            guard file.data.count <= 100 * 1024 * 1024 else {
+                uploadError = "“\(file.filename)” is larger than 100 MB."
+                continue
+            }
+            uploadingNames.append(file.filename)
+            defer { uploadingNames.removeAll { $0 == file.filename } }
+            do {
+                try await handle.upload(file)
+            } catch {
+                uploadError = "Upload of “\(file.filename)” failed."
+            }
+        }
+    }
+
+    /// Reads a picked/dropped file, honoring security-scoped access.
+    private static func readFile(_ url: URL) -> UploadableFile? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+        }
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let mimeType = UTType(filenameExtension: url.pathExtension)?
+            .preferredMIMEType ?? "application/octet-stream"
+        return UploadableFile(
+            data: data, filename: url.lastPathComponent, mimeType: mimeType)
     }
 
     func close() {
@@ -504,6 +563,25 @@ struct MessageActionBar: View {
     }
 }
 
+/// Shown above the composer while files are in flight.
+struct UploadingBanner: View {
+    let names: [String]
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Uploading \(names.joined(separator: ", "))…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.accentColor.opacity(0.08))
+    }
+}
+
 /// Shown above the composer while editing; Esc or the button cancels.
 struct EditingBanner: View {
     let message: Message
@@ -659,9 +737,22 @@ struct ComposerBar: View {
     @Binding var draft: String
     let roomName: String
     let onSend: () async -> Void
+    /// When set, shows a paperclip button and enables file attach.
+    var onAttach: (([URL]) -> Void)?
+
+    @State private var showFilePicker = false
 
     var body: some View {
         HStack(spacing: 8) {
+            if onAttach != nil {
+                Button {
+                    showFilePicker = true
+                } label: {
+                    Image(systemName: "paperclip")
+                }
+                .buttonStyle(.borderless)
+                .help("Attach a file…")
+            }
             TextField("Message \(roomName)", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
@@ -679,5 +770,14 @@ struct ComposerBar: View {
         }
         .padding(10)
         .background(.bar)
+        .fileImporter(
+            isPresented: $showFilePicker,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                onAttach?(urls)
+            }
+        }
     }
 }

@@ -59,7 +59,9 @@ actor RESTClient {
 
         var request = URLRequest(url: url)
         request.httpMethod = endpoint.method.rawValue
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(
+            endpoint.contentType ?? "application/json",
+            forHTTPHeaderField: "Content-Type")
         request.httpBody = endpoint.body
 
         if endpoint.requiresAuth {
