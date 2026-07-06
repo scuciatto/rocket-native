@@ -63,8 +63,11 @@ Roughly ordered by expected value.
 16. **`chat.syncMessages` cursor mode** — newer 7.x cursor pagination
     (`next`/`previous`) isn't used; legacy `lastUpdate` mode works but the
     cursor path is the documented forward direction.
-17. **Unread separator / mark-unread** — rooms mark read on open+send;
-    there's no "new messages" divider or manual mark-unread.
+17. ~~**Unread separator / mark-unread**~~ — **done** (feature/unread-separator):
+    red "New" divider anchored at the last-seen timestamp captured on open
+    (skips own messages), arrivals keep the room read while on screen, and
+    the sidebar context menu gains Mark as Read/Unread (subscriptions.unread
+    with an immediate sidebar catch-up).
 18. **Composer markdown authoring** — markdown typed in the composer passes
     through and renders (server-parsed), but there are no authoring aids:
     add ⌘B/⌘I/⌘⇧X selection wrapping, a code-fence helper, and optionally a

@@ -33,6 +33,8 @@ struct RoomView: View {
         VStack(spacing: 0) {
             TimelineList(
                 entries: model.entries,
+                unreadAnchor: model.unreadAnchor,
+                selfUserId: session.profile?._id,
                 loadOlder: { await model.loadOlder() },
                 actions: MessageActions(
                     openThread: { activeThread = $0 },
@@ -127,7 +129,7 @@ struct RoomView: View {
         }
         .task {
             guard let client = session.client else { return }
-            await model.open(roomId: room.id, client: client)
+            await model.open(room: room, client: client)
         }
         .onDisappear {
             model.close()
@@ -139,19 +141,34 @@ struct RoomView: View {
 @Observable
 final class TimelineModel {
     private(set) var entries: [TimelineEntry] = []
+    /// Where the "new messages" divider sits: the last-seen timestamp at the
+    /// moment the room was opened (nil when everything was already read).
+    private(set) var unreadAnchor: Date?
     var sendError: String?
 
     private var handle: RoomHandle?
     private var observation: Task<Void, Never>?
 
-    func open(roomId: String, client: RocketChatClient) async {
+    func open(room: RoomSummary, client: RocketChatClient) async {
+        // Capture the divider anchor before marking the room read.
+        unreadAnchor = room.unread > 0 || room.alert ? room.lastSeen : nil
         do {
-            let handle = try await client.openRoom(roomId)
+            let handle = try await client.openRoom(room.id)
             self.handle = handle
             try? await handle.markRead()
+            var lastSeenEntryId: String?
             observation = Task {
                 for await snapshot in await handle.timelineUpdates() {
                     self.entries = snapshot.entries
+                    // Arrivals while the room is on screen stay read.
+                    let newestId = snapshot.entries.last?.id
+                    if let newestId, newestId != lastSeenEntryId {
+                        let isFirst = lastSeenEntryId == nil
+                        lastSeenEntryId = newestId
+                        if !isFirst {
+                            try? await handle.markRead()
+                        }
+                    }
                 }
             }
             await observation?.value
@@ -244,6 +261,8 @@ final class TimelineModel {
 
 struct TimelineList: View {
     let entries: [TimelineEntry]
+    var unreadAnchor: Date?
+    var selfUserId: String?
     let loadOlder: () async -> Void
     var actions: MessageActions?
 
@@ -263,7 +282,12 @@ struct TimelineList: View {
                 .padding(.vertical, 8)
 
                 let visible = mainEntries
+                let dividerId = Self.firstUnreadId(
+                    entries: visible, anchor: unreadAnchor, selfUserId: selfUserId)
                 ForEach(Array(visible.enumerated()), id: \.element.id) { index, entry in
+                    if entry.id == dividerId {
+                        UnreadDivider()
+                    }
                     MessageRow(
                         entry: entry,
                         isGrouped: isGrouped(visible, at: index),
@@ -273,6 +297,17 @@ struct TimelineList: View {
             .padding(.bottom, 8)
         }
         .defaultScrollAnchor(.bottom)
+    }
+
+    /// First message someone else sent after the last-seen anchor — where
+    /// the "new messages" divider renders. Pure for testability.
+    static func firstUnreadId(
+        entries: [TimelineEntry], anchor: Date?, selfUserId: String?
+    ) -> String? {
+        guard let anchor else { return nil }
+        return entries.first {
+            $0.message.ts > anchor && $0.message.u._id != selfUserId
+        }?.id
     }
 
     /// Consecutive messages from the same author within 5 minutes share one header.
@@ -560,6 +595,21 @@ struct MessageActionBar: View {
             .frame(width: 26, height: 24)
             .contentShape(Rectangle())
             .help(help)
+    }
+}
+
+/// Red "New" separator marking the first unread message.
+struct UnreadDivider: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(Color.red.opacity(0.6)).frame(height: 1)
+            Text("New")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.red)
+            Rectangle().fill(Color.red.opacity(0.6)).frame(height: 1)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
     }
 }
 
