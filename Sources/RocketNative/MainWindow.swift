@@ -113,6 +113,7 @@ final class RoomListModel {
 }
 
 struct SidebarView: View {
+    @Environment(AppSession.self) private var session
     let rooms: [RoomSummary]
     @Binding var selection: String?
 
@@ -129,19 +130,35 @@ struct SidebarView: View {
             if !channels.isEmpty {
                 Section("Channels") {
                     ForEach(channels) { room in
-                        RoomRow(room: room).tag(room.id)
+                        row(room)
                     }
                 }
             }
             if !directMessages.isEmpty {
                 Section("Direct Messages") {
                     ForEach(directMessages) { room in
-                        RoomRow(room: room).tag(room.id)
+                        row(room)
                     }
                 }
             }
         }
         .listStyle(.sidebar)
+    }
+
+    private func row(_ room: RoomSummary) -> some View {
+        RoomRow(room: room)
+            .tag(room.id)
+            .contextMenu {
+                if room.unread > 0 || room.alert {
+                    Button("Mark as Read") {
+                        Task { try? await session.client?.markRead(roomId: room.id) }
+                    }
+                } else {
+                    Button("Mark as Unread") {
+                        Task { try? await session.client?.markUnread(roomId: room.id) }
+                    }
+                }
+            }
     }
 }
 

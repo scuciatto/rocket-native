@@ -92,6 +92,9 @@ public struct RoomSummary: Sendable, Identifiable, Equatable {
     public var readOnly: Bool
     public var lastMessage: Message? = nil
     public var lastActivity: Date? = nil
+    /// When the user last saw the room (`ls`) — anchors the "new messages"
+    /// separator.
+    public var lastSeen: Date? = nil
 
     public init(room: Room?, subscription: Subscription) {
         self.id = subscription.rid
@@ -108,5 +111,6 @@ public struct RoomSummary: Sendable, Identifiable, Equatable {
         self.readOnly = room?.ro ?? false
         self.lastMessage = room?.lastMessage
         self.lastActivity = room?.lm ?? room?.lastMessage?.ts ?? room?._updatedAt
+        self.lastSeen = subscription.ls
     }
 }

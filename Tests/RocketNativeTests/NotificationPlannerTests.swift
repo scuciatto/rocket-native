@@ -127,3 +127,39 @@ private func summary(
         #expect(NotificationManager.dockBadgeLabel(accountRooms: [rooms]) == "")
     }
 }
+
+@MainActor
+@Suite struct UnreadDividerTests {
+    private func entry(_ id: String, ts: TimeInterval, sender: String = "u-ana") -> TimelineEntry {
+        TimelineEntry(
+            message: Message(
+                _id: id, rid: "r1", msg: "hi",
+                ts: Date(timeIntervalSince1970: ts),
+                u: MiniUser(_id: sender, username: nil, name: nil)),
+            delivery: .sent)
+    }
+
+    @Test func dividerLandsOnFirstForeignMessageAfterAnchor() {
+        let entries = [
+            entry("a", ts: 10), entry("b", ts: 20),
+            entry("mine", ts: 30, sender: "uid-9"), entry("c", ts: 40),
+        ]
+        let id = TimelineList.firstUnreadId(
+            entries: entries, anchor: Date(timeIntervalSince1970: 25),
+            selfUserId: "uid-9")
+        #expect(id == "c")   // skips own message at ts 30
+    }
+
+    @Test func noAnchorMeansNoDivider() {
+        let entries = [entry("a", ts: 10)]
+        #expect(TimelineList.firstUnreadId(
+            entries: entries, anchor: nil, selfUserId: "uid-9") == nil)
+    }
+
+    @Test func allMessagesBeforeAnchorMeansNoDivider() {
+        let entries = [entry("a", ts: 10), entry("b", ts: 20)]
+        #expect(TimelineList.firstUnreadId(
+            entries: entries, anchor: Date(timeIntervalSince1970: 99),
+            selfUserId: "uid-9") == nil)
+    }
+}

@@ -207,3 +207,35 @@ private let syncMessagesJSON = """
         #expect(messages.isEmpty)
     }
 }
+
+@Suite struct UnreadStateTests {
+    @Test func roomSummaryCarriesLastSeen() throws {
+        let ls = Date(timeIntervalSince1970: 1_700_000_000)
+        let summary = RoomSummary(
+            room: Room(_id: "r1", t: .channel, name: "general"),
+            subscription: Subscription(
+                _id: "s1", rid: "r1", t: .channel, unread: 3, ls: ls))
+        #expect(summary.lastSeen == ls)
+        #expect(summary.unread == 3)
+    }
+
+    @Test func markUnreadPostsThenCatchesUpSidebar() async throws {
+        let transport = MockHTTPTransport()
+        transport.expect(path: "subscriptions.unread") { request in
+            let body = try JSONSerialization.jsonObject(with: request.httpBody!)
+                as? [String: Any]
+            #expect(body?["roomId"] as? String == "r1")
+            return (Data(#"{"success": true}"#.utf8),
+                    MockHTTPTransport.httpResponse(url: request.url!, status: 200))
+        }
+        transport.respond(path: "rooms.get", json: #"{"update": [], "remove": [], "success": true}"#)
+        transport.respond(path: "subscriptions.get", json: #"{"update": [], "remove": [], "success": true}"#)
+
+        let client = await makeClient(transport)
+        try await client.markUnread(roomId: "r1")
+
+        let paths = transport.requests.compactMap { $0.url?.path() }
+        #expect(paths.contains { $0.hasSuffix("subscriptions.unread") })
+        #expect(paths.contains { $0.hasSuffix("rooms.get") })
+    }
+}

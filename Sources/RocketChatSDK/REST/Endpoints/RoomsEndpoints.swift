@@ -34,5 +34,12 @@ extension API {
             }
             return .post("subscriptions.read", body: Body(rid: roomId))
         }
+
+        static func unread(roomId: String) -> Endpoint<SuccessResponse> {
+            struct Body: Encodable {
+                var roomId: String
+            }
+            return .post("subscriptions.unread", body: Body(roomId: roomId))
+        }
     }
 }

@@ -209,6 +209,13 @@ public final class RocketChatClient: Sendable {
         _ = try await rest.send(API.Subscriptions.read(roomId: roomId))
     }
 
+    /// Marks a room unread again (its badge reappears), with an immediate
+    /// sidebar catch-up so the change is visible right away.
+    public func markUnread(roomId: String) async throws {
+        _ = try await rest.send(API.Subscriptions.unread(roomId: roomId))
+        await engine.tickSidebar()
+    }
+
     // MARK: - Messages
 
     /// Latest messages in a room, newest first, offset-paged.
