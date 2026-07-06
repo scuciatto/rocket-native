@@ -99,4 +99,6 @@ DMs), sync-status badge, and slower polling while backgrounded.
 - Integration server: `cd IntegrationTests && docker compose up -d`, then
   `swift run rc-cli login http://localhost:3000 admin` (password `rc-admin-pass`)
 
-Supported servers: Rocket.Chat 6.x/7.x (validated live against 7.0).
+Supported servers: Rocket.Chat 7.x and 8.x — validated live against 7.0 and
+8.6.0 (full endpoint sweep, delta-sync tail, and push bell). The 8.0
+breaking-change wave removed no endpoint this SDK uses.

@@ -24,8 +24,8 @@ Roughly ordered by expected value.
    conversation tabs), all accounts live concurrently, aggregated
    notifications/Dock badge, ⌘1…⌘9 switching, add-server sheet, per-server
    logout. Rail hidden with a single server.
-5. **File upload** — `rooms.upload` endpoint + drag-and-drop/paste in the
-   composer.
+5. **File upload** — `rooms.media/:rid` endpoint (NOT `rooms.upload`, which
+   was removed in RC 8.0) + drag-and-drop/paste in the composer.
 
 ## Open questions from the plan (still open)
 
