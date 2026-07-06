@@ -315,6 +315,26 @@ func runDirectory(text: String, type: DirectoryType) async {
     }
 }
 
+func runUpload(room nameOrId: String, path: String, text: String?) async {
+    let (client, _) = await authenticatedClient()
+    let room = await resolveRoom(client, nameOrId)
+    let url = URL(filePath: path)
+    guard let data = try? Data(contentsOf: url) else {
+        fail("could not read \(path)")
+    }
+    let file = UploadableFile(
+        data: data, filename: url.lastPathComponent,
+        mimeType: "application/octet-stream")
+    do {
+        let message = try await client.uploadFile(
+            file, roomId: room.id, text: text)
+        print("uploaded \(file.filename) to \(room.displayName)"
+            + (message.map { " (message \($0._id))" } ?? ""))
+    } catch {
+        fail(describe(error))
+    }
+}
+
 func runLogout() async {
     let (client, _) = await authenticatedClient()
     try? await client.logout()
@@ -347,6 +367,11 @@ case "send":
 case "tail":
     guard arguments.count == 2 else { fail("usage: rc-cli tail <room>") }
     await runTail(room: arguments[1])
+case "upload":
+    guard arguments.count >= 3 else { fail("usage: rc-cli upload <room> <path> [text...]") }
+    await runUpload(
+        room: arguments[1], path: arguments[2],
+        text: arguments.count > 3 ? arguments.dropFirst(3).joined(separator: " ") : nil)
 case "threads":
     guard arguments.count == 2 else { fail("usage: rc-cli threads <room>") }
     await runThreads(room: arguments[1])

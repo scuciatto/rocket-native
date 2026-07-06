@@ -13,6 +13,8 @@ struct Endpoint<Response: Decodable & Sendable>: Sendable {
     var queryItems: [URLQueryItem] = []
     var body: Data?
     var requiresAuth = true
+    /// Overrides the default `application/json` (e.g. multipart uploads).
+    var contentType: String?
 
     static func get(
         _ path: String, query: [URLQueryItem] = [], requiresAuth: Bool = true

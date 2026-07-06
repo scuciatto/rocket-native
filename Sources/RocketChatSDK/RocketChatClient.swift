@@ -260,6 +260,21 @@ public final class RocketChatClient: Sendable {
             messageId: messageId, emoji: emoji, shouldReact: on))
     }
 
+    /// Uploads a file into a room (optionally as a thread reply) and posts it,
+    /// with optional accompanying text and description. Two REST steps:
+    /// `rooms.media` (bytes) then `rooms.mediaConfirm` (the message).
+    @discardableResult
+    public func uploadFile(
+        _ file: UploadableFile, roomId: String,
+        text: String? = nil, description: String? = nil, threadId: String? = nil
+    ) async throws -> Message? {
+        let uploaded = try await rest.send(API.Rooms.media(roomId: roomId, file: file))
+        let confirmed = try await rest.send(API.Rooms.mediaConfirm(
+            roomId: roomId, fileId: uploaded.file._id,
+            text: text, description: description, threadId: threadId))
+        return confirmed.message
+    }
+
     // MARK: - Threads
 
     /// Thread parents in a room (messages carrying `tcount`/`tlm`), newest first.
