@@ -799,42 +799,54 @@ struct ComposerBar: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
+            formattingToolbar
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+                .padding(.bottom, 6)
+
             if showPreview, hasDraft {
                 previewPane
-                Divider()
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 6)
             }
+
+            TextField("Message \(roomName)", text: $draft, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.body)
+                .lineLimit(1...10)
+                .frame(minHeight: 44, alignment: .topLeading)
+                .padding(.horizontal, 12)
+                .focused($isFocused)
+                .onSubmit {
+                    Task { await onSend() }
+                }
+
             HStack(spacing: 8) {
                 if onAttach != nil {
-                    Button {
+                    ComposerToolButton(
+                        icon: "paperclip", help: "Attach a file…"
+                    ) {
                         showFilePicker = true
-                    } label: {
-                        Image(systemName: "paperclip")
                     }
-                    .buttonStyle(.borderless)
-                    .help("Attach a file…")
                 }
-                TextField("Message \(roomName)", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...6)
-                    .focused($isFocused)
-                    .onSubmit {
-                        Task { await onSend() }
-                    }
-                if isFocused || hasDraft {
-                    formattingStrip
-                }
-                Button {
-                    Task { await onSend() }
-                } label: {
-                    Image(systemName: "paperplane.fill")
-                }
-                .buttonStyle(.borderless)
-                .disabled(!hasDraft)
-                .keyboardShortcut(.return, modifiers: [])
+                Spacer()
+                sendButton
             }
-            .padding(10)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
         }
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(nsColor: .textBackgroundColor).opacity(0.6)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(
+                    isFocused ? Color.accentColor.opacity(0.55) : Color.secondary.opacity(0.25),
+                    lineWidth: 1))
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
         .background(.bar)
         .fileImporter(
             isPresented: $showFilePicker,
@@ -847,56 +859,114 @@ struct ComposerBar: View {
         }
     }
 
-    /// Compact formatting buttons, shown only while composing to keep the
-    /// bar unbloated. Markdown always passes through even without these.
-    private var formattingStrip: some View {
-        HStack(spacing: 2) {
+    /// The small always-visible formatting toolbar across the card's top.
+    private var formattingToolbar: some View {
+        HStack(spacing: 3) {
             formatButton(.bold)
                 .keyboardShortcut("b", modifiers: .command)
             formatButton(.italic)
                 .keyboardShortcut("i", modifiers: .command)
             formatButton(.strike)
                 .keyboardShortcut("x", modifiers: [.command, .shift])
+
+            toolbarDivider
+
             formatButton(.inlineCode)
                 .keyboardShortcut("c", modifiers: [.command, .shift])
-            Button {
+            ComposerToolButton(icon: "curlybraces", help: "Code block (⌘⌥⇧C)") {
                 ComposerMarkdown.insertCodeFence(fallback: $draft)
-            } label: {
-                Image(systemName: "curlybraces")
             }
-            .buttonStyle(.borderless)
-            .help("Code block (⌘⌥⇧C)")
             .keyboardShortcut("c", modifiers: [.command, .option, .shift])
-            Button {
+
+            Spacer()
+
+            ComposerToolButton(
+                icon: showPreview ? "eye.fill" : "eye",
+                help: "Preview formatting (⌘⇧P)",
+                isActive: showPreview
+            ) {
                 showPreview.toggle()
-            } label: {
-                Image(systemName: showPreview ? "eye.fill" : "eye")
             }
-            .buttonStyle(.borderless)
-            .help("Preview formatting (⌘⇧P)")
             .keyboardShortcut("p", modifiers: [.command, .shift])
         }
-        .foregroundStyle(.secondary)
+    }
+
+    private var toolbarDivider: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.3))
+            .frame(width: 1, height: 12)
+            .padding(.horizontal, 3)
     }
 
     private func formatButton(_ style: ComposerMarkdown.Style) -> some View {
-        Button {
+        ComposerToolButton(icon: style.icon, help: style.help) {
             ComposerMarkdown.toggle(style, fallback: $draft)
-        } label: {
-            Image(systemName: style.icon)
         }
-        .buttonStyle(.borderless)
-        .help(style.help)
+    }
+
+    private var sendButton: some View {
+        Button {
+            Task { await onSend() }
+        } label: {
+            Image(systemName: "paperplane.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .background(
+                    Circle().fill(hasDraft
+                        ? AnyShapeStyle(Color.accentColor)
+                        : AnyShapeStyle(Color.secondary.opacity(0.35))))
+        }
+        .buttonStyle(.plain)
+        .disabled(!hasDraft)
+        .keyboardShortcut(.return, modifiers: [])
+        .help("Send")
+        .animation(.easeOut(duration: 0.12), value: hasDraft)
     }
 
     private var previewPane: some View {
-        ScrollView {
-            Text(ComposerMarkdown.preview(of: draft))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
+        VStack(alignment: .leading, spacing: 4) {
+            Text("PREVIEW")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            ScrollView {
+                Text(ComposerMarkdown.preview(of: draft))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 110)
         }
-        .frame(maxHeight: 120)
-        .background(Color.secondary.opacity(0.05))
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.secondary.opacity(0.08)))
+    }
+}
+
+/// Small hover-highlighting icon button for the composer toolbar.
+struct ComposerToolButton: View {
+    let icon: String
+    let help: String
+    var isActive = false
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(isActive ? Color.accentColor : .secondary)
+                .frame(width: 24, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(isActive
+                            ? Color.accentColor.opacity(0.15)
+                            : isHovering ? Color.secondary.opacity(0.15) : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(help)
     }
 }
