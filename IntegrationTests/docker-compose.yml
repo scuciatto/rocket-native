@@ -1,6 +1,8 @@
 # Local Rocket.Chat for SDK integration testing.
 #
-#   cd IntegrationTests && docker compose up -d
+#   cd IntegrationTests && docker compose up -d              # default: 8.6.0
+#   RC_VERSION=7.0.0 MONGO_VERSION=6.0 docker compose up -d  # test another version
+#   (RC 8.x officially requires MongoDB 8.0; RC 7.x supports MongoDB 5.0-7.0)
 #   # wait ~1-2 min for first boot, then:
 #   swift run rc-cli login http://localhost:3000 admin   # password: rc-admin-pass
 #
@@ -8,7 +10,7 @@
 
 services:
   rocketchat:
-    image: registry.rocket.chat/rocketchat/rocket.chat:7.0.0
+    image: registry.rocket.chat/rocketchat/rocket.chat:${RC_VERSION:-8.6.0}
     restart: unless-stopped
     environment:
       MONGO_URL: mongodb://mongodb:27017/rocketchat?replicaSet=rs0
@@ -29,7 +31,7 @@ services:
         condition: service_healthy
 
   mongodb:
-    image: mongo:6.0
+    image: mongo:${MONGO_VERSION:-8.0}
     restart: unless-stopped
     command: mongod --replSet rs0 --oplogSize 128
     healthcheck:
