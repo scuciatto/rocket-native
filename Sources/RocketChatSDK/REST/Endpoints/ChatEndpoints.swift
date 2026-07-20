@@ -33,6 +33,13 @@ extension API {
             ])
         }
 
+        /// One message by id — e.g. resolving a search result's thread parent.
+        static func getMessage(messageId: String) -> Endpoint<SingleMessageResponse> {
+            .get("chat.getMessage", query: [
+                URLQueryItem(name: "msgId", value: messageId),
+            ])
+        }
+
         static func sendMessage(
             roomId: String, text: String, messageId: String, threadId: String? = nil
         ) -> Endpoint<SingleMessageResponse> {

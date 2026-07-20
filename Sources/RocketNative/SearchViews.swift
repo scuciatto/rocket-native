@@ -6,7 +6,8 @@ struct RoomSearchSheet: View {
     @Environment(AppSession.self) private var session
     @Environment(\.dismiss) private var dismiss
     let room: RoomSummary
-    /// Called with the tapped result so the caller can jump to its thread.
+    /// Called with the tapped result so the caller can jump the timeline to
+    /// it (or open its thread when the hit is a thread reply).
     let onSelect: (Message) -> Void
 
     @State private var query = ""
@@ -48,12 +49,14 @@ struct RoomSearchSheet: View {
                         VStack(alignment: .leading, spacing: 2) {
                             HStack {
                                 Text(message.u.username ?? "?")
-                                    .fontWeight(.semibold)
+                                    .font(.rcSenderName)
+                                    .foregroundStyle(Color.rcFontTitlesLabels)
                                 Text(message.ts, format: .dateTime.day().month().hour().minute())
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .font(.rcTimestamp)
+                                    .foregroundStyle(Color.rcFontAnnotation)
                             }
                             Text(message.msg)
+                                .font(.rcBody)
                                 .lineLimit(3)
                         }
                         .contentShape(Rectangle())
@@ -160,7 +163,7 @@ struct GlobalSearchSheet: View {
             if let actionError {
                 Text(actionError)
                     .font(.callout)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.rcDanger)
                     .padding(8)
             }
         }
@@ -189,10 +192,11 @@ struct GlobalSearchSheet: View {
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
+                        .font(.rcBody)
                     if let subtitle, !subtitle.isEmpty {
                         Text(subtitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.rcCaption)
+                            .foregroundStyle(Color.rcFontSecondaryInfo)
                             .lineLimit(1)
                     }
                 }
