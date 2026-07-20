@@ -29,11 +29,9 @@ struct ServerRail: View {
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 15, weight: .semibold))
-                .frame(width: 36, height: 36)
-                .background(Color.secondary.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .frame(width: 28, height: 28)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.glass)
         .help("Add a server…")
     }
 }
@@ -55,13 +53,13 @@ struct ServerRailButton: View {
                     .foregroundStyle(isActive ? Color.white : .primary)
                     .frame(width: 36, height: 36)
                     .background(isActive
-                        ? AnyShapeStyle(Color.accentColor)
+                        ? AnyShapeStyle(Color.rcPrimary)
                         : AnyShapeStyle(Color.secondary.opacity(0.18)))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .overlay {
                         RoundedRectangle(cornerRadius: 10)
                             .strokeBorder(
-                                isActive ? Color.accentColor : .clear, lineWidth: 2)
+                                isActive ? Color.rcPrimary : .clear, lineWidth: 2)
                             .padding(-3)
                     }
                 if badge.personal > 0 {
@@ -70,12 +68,12 @@ struct ServerRailButton: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1.5)
-                        .background(Color.red)
+                        .background(Color.rcBadgeMention)
                         .clipShape(Capsule())
                         .offset(x: 6, y: -5)
                 } else if badge.hasUnread {
                     Circle()
-                        .fill(Color.secondary)
+                        .fill(Color.rcBadgePlain)
                         .frame(width: 8, height: 8)
                         .offset(x: 3, y: -2)
                 }

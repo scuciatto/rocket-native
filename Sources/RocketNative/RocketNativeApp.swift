@@ -15,6 +15,7 @@ struct RocketNativeApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .tint(.rcPrimary)
                 .environment(session)
                 .task { await session.resumeIfPossible() }
         }

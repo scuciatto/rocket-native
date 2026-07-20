@@ -31,7 +31,8 @@ struct ThreadPanel: View {
         VStack(spacing: 0) {
             HStack {
                 Text("Thread")
-                    .font(.headline)
+                    .font(.rcSenderName)
+                    .foregroundStyle(Color.rcFontTitlesLabels)
                 Spacer()
                 Button {
                     onClose()

@@ -69,20 +69,31 @@ struct WorkspaceView: View {
             session.notifications.activeRoomId = roomId
         }
         .toolbar {
+            // Passive status readouts stay out of the shared glass capsule;
+            // only real actions get the Liquid Glass treatment.
             if account.cacheUnavailable {
-                Label("No offline cache", systemImage: "externaldrive.badge.exclamationmark")
-                    .foregroundStyle(.orange)
-                    .help("The local message cache could not be opened; "
-                        + "this session won't persist history between launches.")
+                ToolbarItem {
+                    Label("No offline cache", systemImage: "externaldrive.badge.exclamationmark")
+                        .foregroundStyle(Color.rcStatusWarning)
+                        .help("The local message cache could not be opened; "
+                            + "this session won't persist history between launches.")
+                }
+                .sharedBackgroundVisibility(.hidden)
             }
-            SyncStateBadge(state: model.syncState)
-            Button {
-                showGlobalSearch = true
-            } label: {
-                Label("Go to…", systemImage: "square.grid.2x2")
+            ToolbarItem {
+                SyncStateBadge(state: model.syncState)
             }
-            .keyboardShortcut("k", modifiers: .command)
-            .help("Search channels and people (⌘K)")
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarSpacer(.fixed)
+            ToolbarItem {
+                Button {
+                    showGlobalSearch = true
+                } label: {
+                    Label("Go to…", systemImage: "square.grid.2x2")
+                }
+                .keyboardShortcut("k", modifiers: .command)
+                .help("Search channels and people (⌘K)")
+            }
         }
         .sheet(isPresented: $showGlobalSearch) {
             GlobalSearchSheet(joinedRooms: model.rooms) { roomId in
@@ -173,23 +184,30 @@ struct RoomRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 16)
             Text(room.displayName)
+                .font(.rcBody)
                 .fontWeight(room.unread > 0 || room.alert ? .semibold : .regular)
                 .lineLimit(1)
             Spacer()
+            // Fuselage unread variants: user mention > unread thread >
+            // group mention (@all/@here) > plain unread.
             if room.mentions > 0 {
-                badge("@\(room.mentions)", prominent: true)
+                badge("@\(room.mentions)", color: .rcBadgeMention)
+            } else if room.unreadThreads > 0 {
+                badge("\(room.unreadThreads)", color: .rcBadgeThread)
+            } else if room.groupMentions > 0 {
+                badge("@\(room.groupMentions)", color: .rcBadgeGroupMention)
             } else if room.unread > 0 {
-                badge("\(room.unread)", prominent: false)
+                badge("\(room.unread)", color: .rcBadgePlain)
             }
         }
     }
 
-    private func badge(_ text: String, prominent: Bool) -> some View {
+    private func badge(_ text: String, color: Color) -> some View {
         Text(text)
             .font(.caption2.weight(.semibold))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(prominent ? Color.red : Color.secondary.opacity(0.35))
+            .background(color)
             .foregroundStyle(.white)
             .clipShape(Capsule())
     }
@@ -202,10 +220,10 @@ struct SyncStateBadge: View {
         switch state {
         case .degraded:
             Label("Reconnecting…", systemImage: "wifi.exclamationmark")
-                .foregroundStyle(.orange)
+                .foregroundStyle(Color.rcStatusWarning)
         case .unauthorized:
             Label("Session expired", systemImage: "lock.slash")
-                .foregroundStyle(.red)
+                .foregroundStyle(Color.rcDanger)
         case .syncing:
             ProgressView().controlSize(.small)
         case .synced, .idle:

@@ -86,6 +86,7 @@ public struct RoomSummary: Sendable, Identifiable, Equatable {
     public var unread: Int
     public var alert: Bool
     public var mentions: Int
+    public var groupMentions: Int
     public var unreadThreads: Int
     public var favorite: Bool
     public var open: Bool
@@ -105,6 +106,7 @@ public struct RoomSummary: Sendable, Identifiable, Equatable {
         self.unread = subscription.unread ?? 0
         self.alert = subscription.alert ?? false
         self.mentions = subscription.userMentions ?? 0
+        self.groupMentions = subscription.groupMentions ?? 0
         self.unreadThreads = subscription.tunread?.count ?? 0
         self.favorite = subscription.f ?? false
         self.open = subscription.open ?? true
