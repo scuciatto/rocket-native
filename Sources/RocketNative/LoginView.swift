@@ -53,7 +53,7 @@ struct LoginView: View {
             if let error = session.loginError {
                 Text(error)
                     .font(.callout)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.rcDanger)
             }
 
             HStack {
@@ -68,7 +68,7 @@ struct LoginView: View {
                         Text("Sign In").frame(minWidth: 80)
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(isBusy || server.isEmpty || username.isEmpty || password.isEmpty)
             }
@@ -133,7 +133,7 @@ struct TwoFactorSheet: View {
             if let error = session.loginError {
                 Text(error)
                     .font(.callout)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.rcDanger)
             }
 
             if let methods = challenge?.availableMethods, methods.count > 1 {
@@ -158,7 +158,7 @@ struct TwoFactorSheet: View {
                 Button("Cancel") { session.cancelTwoFactor() }
                     .keyboardShortcut(.cancelAction)
                 Button("Verify") { submit() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(code.trimmingCharacters(in: .whitespaces).isEmpty)
             }

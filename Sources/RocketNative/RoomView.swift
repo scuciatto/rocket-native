@@ -35,6 +35,7 @@ struct RoomView: View {
                 entries: model.entries,
                 unreadAnchor: model.unreadAnchor,
                 selfUserId: session.profile?._id,
+                highlightedId: model.highlightedMessageId,
                 loadOlder: { await model.loadOlder() },
                 actions: MessageActions(
                     openThread: { activeThread = $0 },
@@ -53,7 +54,13 @@ struct RoomView: View {
             if let uploadError = model.uploadError {
                 Text(uploadError)
                     .font(.callout)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.rcDanger)
+                    .padding(.vertical, 4)
+            }
+            if let jumpError = model.jumpError {
+                Text(jumpError)
+                    .font(.callout)
+                    .foregroundStyle(Color.rcDanger)
                     .padding(.vertical, 4)
             }
             if let editing = editingMessage {
@@ -122,9 +129,15 @@ struct RoomView: View {
             }
         }
         .sheet(isPresented: $showSearch) {
-            RoomSearchSheet(room: room) { parent in
+            RoomSearchSheet(room: room) { message in
                 showSearch = false
-                activeThread = parent
+                if let threadId = message.tmid {
+                    // Thread replies aren't on the main timeline; open
+                    // their thread, rooted at the real parent message.
+                    openThread(threadId, fallingBackTo: message)
+                } else {
+                    Task { await model.jump(to: message._id) }
+                }
             }
         }
         .task {
@@ -133,6 +146,17 @@ struct RoomView: View {
         }
         .onDisappear {
             model.close()
+        }
+    }
+
+    private func openThread(_ threadId: String, fallingBackTo message: Message) {
+        Task {
+            if let client = session.client,
+               let parent = try? await client.getMessage(threadId) {
+                activeThread = parent
+            } else {
+                activeThread = message
+            }
         }
     }
 }
@@ -211,6 +235,34 @@ final class TimelineModel {
         try? await handle?.loadOlder()
     }
 
+    // MARK: - Jump to message
+
+    /// Row the timeline should scroll to and flash; auto-clears shortly after.
+    private(set) var highlightedMessageId: String?
+    var jumpError: String?
+
+    /// Pages history until the message is in the window, then flags it for
+    /// scroll-and-highlight (e.g. from a search result).
+    func jump(to messageId: String) async {
+        guard let handle else { return }
+        jumpError = nil
+        let found = (try? await handle.loadOlder(until: messageId)) ?? false
+        guard found else {
+            jumpError = "Couldn't find that message in the loaded history."
+            return
+        }
+        // Refresh entries directly so the target row exists before the view
+        // scrolls to it — the observation stream may not have caught up yet.
+        entries = await handle.timeline().entries
+        highlightedMessageId = messageId
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            if highlightedMessageId == messageId {
+                highlightedMessageId = nil
+            }
+        }
+    }
+
     // MARK: - Uploads
 
     private(set) var uploadingNames: [String] = []
@@ -263,6 +315,7 @@ struct TimelineList: View {
     let entries: [TimelineEntry]
     var unreadAnchor: Date?
     var selfUserId: String?
+    var highlightedId: String?
     let loadOlder: () async -> Void
     var actions: MessageActions?
 
@@ -272,31 +325,42 @@ struct TimelineList: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                Button("Load earlier messages") {
-                    Task { await loadOlder() }
-                }
-                .buttonStyle(.link)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-
-                let visible = mainEntries
-                let dividerId = Self.firstUnreadId(
-                    entries: visible, anchor: unreadAnchor, selfUserId: selfUserId)
-                ForEach(Array(visible.enumerated()), id: \.element.id) { index, entry in
-                    if entry.id == dividerId {
-                        UnreadDivider()
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    Button("Load earlier messages") {
+                        Task { await loadOlder() }
                     }
-                    MessageRow(
-                        entry: entry,
-                        isGrouped: isGrouped(visible, at: index),
-                        actions: actions)
+                    .buttonStyle(.link)
+                    .foregroundStyle(Color.rcFontInfo)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+
+                    let visible = mainEntries
+                    let dividerId = Self.firstUnreadId(
+                        entries: visible, anchor: unreadAnchor, selfUserId: selfUserId)
+                    ForEach(Array(visible.enumerated()), id: \.element.id) { index, entry in
+                        if entry.id == dividerId {
+                            UnreadDivider()
+                        }
+                        MessageRow(
+                            entry: entry,
+                            isGrouped: isGrouped(visible, at: index),
+                            isHighlighted: entry.id == highlightedId,
+                            actions: actions)
+                    }
+                }
+                .padding(.bottom, 8)
+            }
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .defaultScrollAnchor(.bottom)
+            .onChange(of: highlightedId) { _, target in
+                guard let target else { return }
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    proxy.scrollTo(target, anchor: .center)
                 }
             }
-            .padding(.bottom, 8)
         }
-        .defaultScrollAnchor(.bottom)
     }
 
     /// First message someone else sent after the last-seen anchor — where
@@ -325,6 +389,8 @@ struct MessageRow: View {
     @Environment(AppSession.self) private var session
     let entry: TimelineEntry
     let isGrouped: Bool
+    /// Flashes the row background (jump-to-message landing).
+    var isHighlighted = false
     var actions: MessageActions?
 
     @State private var isHovering = false
@@ -349,8 +415,8 @@ struct MessageRow: View {
             Text("\(message.u.username ?? "?") \(systemDescription)")
         }
         .font(.callout)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 16)
+        .foregroundStyle(Color.rcFontSecondaryInfo)
+        .padding(.horizontal, RCSpace.x5)
         .padding(.vertical, 4)
     }
 
@@ -365,7 +431,8 @@ struct MessageRow: View {
     }
 
     private var userRow: some View {
-        HStack(alignment: .top, spacing: 10) {
+        // Fuselage gutter: 28pt avatar + 8pt gap = 36pt.
+        HStack(alignment: .top, spacing: RCSpace.x2) {
             if isGrouped {
                 Color.clear.frame(width: 28)
             } else if let username = message.u.username {
@@ -376,10 +443,11 @@ struct MessageRow: View {
                 if !isGrouped {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(message.u.name ?? message.u.username ?? "?")
-                            .fontWeight(.semibold)
+                            .font(.rcSenderName)
+                            .foregroundStyle(Color.rcFontTitlesLabels)
                         Text(message.ts, style: .time)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .font(.rcTimestamp)
+                            .foregroundStyle(Color.rcFontAnnotation)
                     }
                     .padding(.top, 8)
                 }
@@ -390,9 +458,12 @@ struct MessageRow: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, RCSpace.x5)
         .padding(.vertical, 1)
-        .background(isHovering ? Color.secondary.opacity(0.07) : .clear)
+        .background(isHighlighted
+            ? Color.rcPrimary.opacity(0.12)
+            : isHovering ? Color.rcSurfaceHover : .clear)
+        .animation(.easeOut(duration: 0.4), value: isHighlighted)
         .overlay(alignment: .topTrailing) {
             if isHovering, actions != nil, entry.delivery == .sent {
                 MessageActionBar(
@@ -441,10 +512,10 @@ struct MessageRow: View {
                     Text("\(count) \(count == 1 ? "reply" : "replies")")
                     if let last = message.tlm {
                         Text(last, style: .relative)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Color.rcFontAnnotation)
                     }
                 }
-                .font(.caption)
+                .font(.rcCaption)
             }
             .buttonStyle(.link)
             .padding(.top, 2)
@@ -459,18 +530,20 @@ struct MessageRow: View {
                     .opacity(entry.delivery == .sending ? 0.5 : 1)
             } else if !message.msg.isEmpty {
                 Text(message.msg)
+                    .font(.rcBody)
+                    .foregroundStyle(Color.rcFontDefault)
                     .textSelection(.enabled)
                     .opacity(entry.delivery == .sending ? 0.5 : 1)
             }
             if entry.delivery == .failed {
                 Image(systemName: "exclamationmark.circle.fill")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.rcDanger)
                     .help("Failed to send")
             }
             if message.editedAt != nil {
                 Text("(edited)")
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Color.rcFontAnnotation)
             }
         }
     }
@@ -495,17 +568,17 @@ struct MessageRow: View {
                             Text(EmojiMap.unicode(forShortCode: emoji) ?? emoji)
                             Text("\(reaction.usernames.count)")
                                 .font(.caption2.weight(.medium))
-                                .foregroundStyle(mine ? Color.accentColor : .secondary)
+                                .foregroundStyle(mine ? Color.rcPrimary : Color.rcFontSecondaryInfo)
                         }
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(mine
-                            ? Color.accentColor.opacity(0.18)
-                            : Color.secondary.opacity(0.12))
+                            ? Color.rcPrimary.opacity(0.12)
+                            : Color.rcSurfaceNeutral)
                         .overlay {
                             if mine {
                                 Capsule().strokeBorder(
-                                    Color.accentColor.opacity(0.5), lineWidth: 1)
+                                    Color.rcStrokeHighlight, lineWidth: 1)
                             }
                         }
                         .clipShape(Capsule())
@@ -577,13 +650,9 @@ struct MessageActionBar: View {
                 }
             }
         }
-        .padding(3)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 0.5)
-        }
-        .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .glassEffect(.regular.interactive(), in: Capsule())
     }
 
     private func barButton(
@@ -602,13 +671,13 @@ struct MessageActionBar: View {
 struct UnreadDivider: View {
     var body: some View {
         HStack(spacing: 8) {
-            Rectangle().fill(Color.red.opacity(0.6)).frame(height: 1)
+            Rectangle().fill(Color.rcDanger).frame(height: 1)
             Text("New")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.red)
-            Rectangle().fill(Color.red.opacity(0.6)).frame(height: 1)
+                .font(.rcCaptionBold)
+                .foregroundStyle(Color.rcDanger)
+            Rectangle().fill(Color.rcDanger).frame(height: 1)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, RCSpace.x5)
         .padding(.vertical, 6)
     }
 }
@@ -628,7 +697,7 @@ struct UploadingBanner: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color.accentColor.opacity(0.08))
+        .background(Color.rcSurfaceTint)
     }
 }
 
@@ -658,7 +727,7 @@ struct EditingBanner: View {
         .font(.callout)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color.accentColor.opacity(0.08))
+        .background(Color.rcSurfaceTint)
     }
 }
 
@@ -685,23 +754,23 @@ struct RenderedBlocksView: View {
         case .code(_, let code):
             ScrollView(.horizontal) {
                 Text(code)
-                    .font(.callout.monospaced())
+                    .font(.rcMono)
                     .textSelection(.enabled)
                     .padding(8)
             }
-            .background(Color.secondary.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .background(Color.rcSurfaceNeutral)
+            .clipShape(RoundedRectangle(cornerRadius: RCRadius.medium))
         case .quote(let paragraphs):
             HStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.secondary.opacity(0.4))
+                RoundedRectangle(cornerRadius: RCRadius.small)
+                    .fill(Color.rcStrokeLight)
                     .frame(width: 3)
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, text in
                         Text(text).textSelection(.enabled)
                     }
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.rcFontSecondaryInfo)
             }
         case .list(let items, let ordered):
             VStack(alignment: .leading, spacing: 2) {
@@ -725,15 +794,15 @@ struct AvatarView: View {
         AsyncImage(url: session.client?.avatarURL(username: username, size: 56)) { image in
             image.resizable()
         } placeholder: {
-            Circle().fill(Color.secondary.opacity(0.25))
+            Circle().fill(Color.rcSurfaceNeutral)
                 .overlay {
                     Text(String(username.prefix(1)).uppercased())
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.rcFontSecondaryInfo)
                 }
         }
         .frame(width: 28, height: 28)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: RCRadius.medium))
     }
 }
 
@@ -748,7 +817,7 @@ struct AttachmentView: View {
                 image.resizable().aspectRatio(contentMode: .fit)
             } placeholder: {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.secondary.opacity(0.1))
+                    .fill(Color.rcSurfaceTint)
                     .overlay { ProgressView().controlSize(.small) }
                     .frame(height: 120)
             }
@@ -766,12 +835,12 @@ struct AttachmentView: View {
             .buttonStyle(.link)
         } else if let text = attachment.text {
             HStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.accentColor.opacity(0.5))
+                RoundedRectangle(cornerRadius: RCRadius.small)
+                    .fill(Color.rcStrokeLight)
                     .frame(width: 3)
                 Text(text)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.rcFontSecondaryInfo)
                     .lineLimit(4)
             }
         }
@@ -813,7 +882,7 @@ struct ComposerBar: View {
 
             TextField("Message \(roomName)", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.body)
+                .font(.rcBody)
                 .lineLimit(1...10)
                 .frame(minHeight: 44, alignment: .topLeading)
                 .padding(.horizontal, 12)
@@ -837,13 +906,19 @@ struct ComposerBar: View {
             .padding(.bottom, 8)
         }
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color(nsColor: .textBackgroundColor).opacity(0.6)))
+            RoundedRectangle(cornerRadius: RCRadius.large)
+                .fill(Color.rcSurfaceLight))
+        .background(
+            // Fuselage focus shadow: a soft halo just outside the card edge.
+            RoundedRectangle(cornerRadius: RCRadius.large)
+                .stroke(Color.rcShadowHighlight, lineWidth: 4)
+                .opacity(isFocused ? 1 : 0))
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: RCRadius.large)
                 .strokeBorder(
-                    isFocused ? Color.accentColor.opacity(0.55) : Color.secondary.opacity(0.25),
+                    isFocused ? Color.rcStrokeHighlight : Color.rcStrokeLight,
                     lineWidth: 1))
+        .animation(.easeOut(duration: 0.15), value: isFocused)
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 10)
@@ -893,7 +968,7 @@ struct ComposerBar: View {
 
     private var toolbarDivider: some View {
         Rectangle()
-            .fill(Color.secondary.opacity(0.3))
+            .fill(Color.rcStrokeExtraLight)
             .frame(width: 1, height: 12)
             .padding(.horizontal, 3)
     }
@@ -905,30 +980,26 @@ struct ComposerBar: View {
     }
 
     private var sendButton: some View {
+        // The one brand-tinted glass control in the room, per HIG.
         Button {
             Task { await onSend() }
         } label: {
             Image(systemName: "paperplane.fill")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
-                .background(
-                    Circle().fill(hasDraft
-                        ? AnyShapeStyle(Color.accentColor)
-                        : AnyShapeStyle(Color.secondary.opacity(0.35))))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.glassProminent)
+        .tint(.rcPrimary)
+        .controlSize(.small)
         .disabled(!hasDraft)
         .keyboardShortcut(.return, modifiers: [])
         .help("Send")
-        .animation(.easeOut(duration: 0.12), value: hasDraft)
     }
 
     private var previewPane: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("PREVIEW")
                 .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Color.rcFontAnnotation)
             ScrollView {
                 Text(ComposerMarkdown.preview(of: draft))
                     .textSelection(.enabled)
@@ -938,8 +1009,8 @@ struct ComposerBar: View {
         }
         .padding(8)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.secondary.opacity(0.08)))
+            RoundedRectangle(cornerRadius: RCRadius.medium)
+                .fill(Color.rcSurfaceTint))
     }
 }
 
@@ -956,13 +1027,13 @@ struct ComposerToolButton: View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(isActive ? Color.accentColor : .secondary)
+                .foregroundStyle(isActive ? Color.rcPrimary : Color.rcFontSecondaryInfo)
                 .frame(width: 24, height: 22)
                 .background(
-                    RoundedRectangle(cornerRadius: 5)
+                    RoundedRectangle(cornerRadius: RCRadius.medium)
                         .fill(isActive
-                            ? Color.accentColor.opacity(0.15)
-                            : isHovering ? Color.secondary.opacity(0.15) : .clear))
+                            ? Color.rcPrimary.opacity(0.12)
+                            : isHovering ? Color.rcSurfaceHover : .clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

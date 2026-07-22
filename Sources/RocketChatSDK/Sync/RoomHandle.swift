@@ -30,6 +30,14 @@ public final class RoomHandle: Sendable {
         try await engine.loadOlder(roomId)
     }
 
+    /// Pages older history until `messageId` is in the window, for jumping
+    /// the timeline to an arbitrary older message. Returns false when the
+    /// message can't be reached (history exhausted or window cap hit).
+    @discardableResult
+    public func loadOlder(until messageId: String) async throws -> Bool {
+        try await engine.loadOlder(roomId, until: messageId)
+    }
+
     /// Sends optimistically: the message appears in the timeline as
     /// `.sending` immediately and reconciles with the server echo.
     public func send(text: String, threadId: String? = nil) async throws {

@@ -99,7 +99,7 @@ enum MarkdownRenderer {
             }
             if let url = URL(string: src) {
                 label.link = url
-                label.foregroundColor = .accentColor
+                label.foregroundColor = .rcFontInfo
                 label.underlineStyle = .single
             }
             return label
@@ -123,10 +123,11 @@ enum MarkdownRenderer {
 
     private static func styled(_ text: String, _ style: Style) -> AttributedString {
         var result = AttributedString(text)
-        var font = Font.body
+        var font = Font.rcBody
+        result.foregroundColor = .rcFontDefault
         if style.contains(.code) {
-            font = .body.monospaced()
-            result.backgroundColor = Color.secondary.opacity(0.15)
+            font = .rcMono
+            result.backgroundColor = Color.rcSurfaceNeutral
         }
         if style.contains(.bold) { font = font.bold() }
         if style.contains(.italic) { font = font.italic() }
@@ -137,8 +138,8 @@ enum MarkdownRenderer {
 
     private static func mention(_ text: String) -> AttributedString {
         var result = AttributedString(text)
-        result.font = .body.weight(.semibold)
-        result.foregroundColor = .accentColor
+        result.font = .rcBody.weight(.semibold)
+        result.foregroundColor = .rcFontInfo
         return result
     }
 

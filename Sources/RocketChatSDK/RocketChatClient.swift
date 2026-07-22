@@ -237,6 +237,11 @@ public final class RocketChatClient: Sendable {
             deleted: response.result.deleted ?? [])
     }
 
+    /// Fetches one message by id (e.g. a thread reply's parent).
+    public func getMessage(_ messageId: String) async throws -> Message {
+        try await rest.send(API.Chat.getMessage(messageId: messageId)).message
+    }
+
     /// Sends a message. The id is client-generated (pass `messageId` to supply
     /// your own, e.g. for optimistic UI); the server honors it, so a later
     /// delta upserts rather than duplicates.

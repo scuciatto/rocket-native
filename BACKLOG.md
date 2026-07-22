@@ -57,9 +57,11 @@ Roughly ordered by expected value.
     else renders as `:shortcode:`. Consider bundling the full emoji-shortname
     table (or the server's custom-emoji endpoint).
 14. **KaTeX / task lists** — render as plain text (per plan, acceptable v1).
-15. **Jump-to-message from search** — in-room search results currently open
-    the message's thread; jumping the main timeline to an arbitrary older
-    message (with history windowing around it) is not implemented.
+15. ~~**Jump-to-message from search**~~ — **done**: selecting a main-timeline
+    search hit pages history until the message is in the window
+    (`RoomHandle.loadOlder(until:)`, capped at `jumpWindowLimit`), then
+    scrolls to and flashes the row; thread-reply hits open their thread,
+    rooted at the real parent via the new `chat.getMessage` client call.
 16. **`chat.syncMessages` cursor mode** — newer 7.x cursor pagination
     (`next`/`previous`) isn't used; legacy `lastUpdate` mode works but the
     cursor path is the documented forward direction.

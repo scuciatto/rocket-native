@@ -178,4 +178,78 @@ private let emptyDeltaJSON = #"{"update": [], "remove": [], "success": true}"#
         let snapshot = await engine.messageStore.snapshot("r1")
         #expect(snapshot.entries.map(\.id) == ["m0", "m1", "m2"])
     }
+
+    @Test func loadOlderUntilPagesUntilTargetIsVisible() async throws {
+        let transport = MockHTTPTransport()
+        transport.respond(path: "channels.messages", json: """
+            {"messages": [
+              {"_id": "m3", "rid": "r1", "msg": "newest", "ts": "2024-01-02T10:03:00.000Z",
+               "u": {"_id": "u2", "username": "ana"}}
+            ], "count": 1, "offset": 0, "total": 3, "success": true}
+            """)
+        transport.expect(path: "channels.messages") { request in
+            #expect(queryValue(request, "offset") == "1")
+            return (Data("""
+                {"messages": [
+                  {"_id": "m2", "rid": "r1", "msg": "b", "ts": "2024-01-02T10:02:00.000Z",
+                   "u": {"_id": "u2", "username": "ana"}}
+                ], "count": 1, "offset": 1, "total": 3, "success": true}
+                """.utf8),
+                MockHTTPTransport.httpResponse(url: request.url!, status: 200))
+        }
+        transport.expect(path: "channels.messages") { request in
+            #expect(queryValue(request, "offset") == "2")
+            return (Data("""
+                {"messages": [
+                  {"_id": "m1", "rid": "r1", "msg": "target", "ts": "2024-01-02T10:01:00.000Z",
+                   "u": {"_id": "u2", "username": "ana"}}
+                ], "count": 1, "offset": 2, "total": 3, "success": true}
+                """.utf8),
+                MockHTTPTransport.httpResponse(url: request.url!, status: 200))
+        }
+
+        let engine = await makeEngine(transport)
+        try await engine.openRoom("r1", startPolling: false)
+        let found = try await engine.loadOlder("r1", until: "m1")
+
+        #expect(found)
+        let snapshot = await engine.messageStore.snapshot("r1")
+        #expect(snapshot.entries.map(\.id) == ["m1", "m2", "m3"])
+    }
+
+    @Test func loadOlderUntilAlreadyVisibleSkipsNetwork() async throws {
+        let transport = MockHTTPTransport()
+        transport.respond(path: "channels.messages", json: """
+            {"messages": [
+              {"_id": "m1", "rid": "r1", "msg": "here", "ts": "2024-01-02T10:00:00.000Z",
+               "u": {"_id": "u2", "username": "ana"}}
+            ], "count": 1, "offset": 0, "total": 1, "success": true}
+            """)
+
+        let engine = await makeEngine(transport)
+        try await engine.openRoom("r1", startPolling: false)
+        let requestsBefore = transport.requests.count
+        let found = try await engine.loadOlder("r1", until: "m1")
+
+        #expect(found)
+        #expect(transport.requests.count == requestsBefore)
+    }
+
+    @Test func loadOlderUntilReturnsFalseWhenHistoryRunsOut() async throws {
+        let transport = MockHTTPTransport()
+        transport.respond(path: "channels.messages", json: """
+            {"messages": [
+              {"_id": "m1", "rid": "r1", "msg": "only", "ts": "2024-01-02T10:00:00.000Z",
+               "u": {"_id": "u2", "username": "ana"}}
+            ], "count": 1, "offset": 0, "total": 1, "success": true}
+            """)
+        transport.respond(path: "channels.messages", json:
+            #"{"messages": [], "count": 0, "offset": 1, "total": 1, "success": true}"#)
+
+        let engine = await makeEngine(transport)
+        try await engine.openRoom("r1", startPolling: false)
+        let found = try await engine.loadOlder("r1", until: "missing")
+
+        #expect(!found)
+    }
 }

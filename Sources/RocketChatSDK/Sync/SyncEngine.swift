@@ -19,6 +19,9 @@ actor SyncEngine {
         var roomIdleInterval: TimeInterval = 10
         var pageSize: Int = 50
         var closedRoomWindowLimit: Int = 50
+        /// Deepest a jump-to-message may grow the window (matches the
+        /// in-memory store's hard limit, past which prepends are dropped).
+        var jumpWindowLimit: Int = 1000
     }
 
     private let rest: RESTClient
@@ -284,6 +287,29 @@ actor SyncEngine {
         let page = try await rest.send(API.roomMessages(
             roomId: roomId, type: type, count: config.pageSize, offset: offset))
         await messageStore.prepend(older: page.messages, in: roomId)
+    }
+
+    /// Pages older history until `messageId` is in the visible window, so
+    /// the UI can jump to an arbitrary older message (e.g. a search result).
+    /// Returns false when the message can't be surfaced: history ran out or
+    /// `jumpWindowLimit` was reached first.
+    func loadOlder(_ roomId: String, until messageId: String) async throws -> Bool {
+        func isVisible() async -> Bool {
+            await messageStore.snapshot(roomId).entries
+                .contains { $0.id == messageId }
+        }
+        if await isVisible() { return true }
+        let type = await roomStore.roomType(roomId) ?? .channel
+        let maxPages = max(1, config.jumpWindowLimit / config.pageSize)
+        for _ in 0..<maxPages {
+            let offset = await messageStore.count(roomId)
+            let page = try await rest.send(API.roomMessages(
+                roomId: roomId, type: type, count: config.pageSize, offset: offset))
+            if page.messages.isEmpty { return false }
+            await messageStore.prepend(older: page.messages, in: roomId)
+            if await isVisible() { return true }
+        }
+        return false
     }
 
     // MARK: - Thread tier
