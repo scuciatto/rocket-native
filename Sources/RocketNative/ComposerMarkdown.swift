@@ -51,6 +51,20 @@ enum ComposerMarkdown {
         }
     }
 
+    /// The focused editor's current selection (caret when zero-length), in
+    /// UTF-16/NSRange units — for caret-aware features like `@mention`.
+    static func currentSelection() -> NSRange? { focusedEditor()?.selectedRange() }
+
+    /// Replaces `range` with `string` in the focused editor and drops the
+    /// caret just after the inserted text. Goes through `insertText`, so the
+    /// SwiftUI binding stays in sync via the normal text-change path.
+    static func replaceRange(_ range: NSRange, with string: String) {
+        guard let editor = focusedEditor() else { return }
+        editor.insertText(string, replacementRange: range)
+        editor.setSelectedRange(NSRange(
+            location: range.location + (string as NSString).length, length: 0))
+    }
+
     /// Inserts a fenced code block, placing the caret inside.
     static func insertCodeFence(fallback: Binding<String>) {
         guard let editor = focusedEditor() else {

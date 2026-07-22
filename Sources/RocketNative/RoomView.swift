@@ -853,6 +853,7 @@ struct AttachmentView: View {
 }
 
 struct ComposerBar: View {
+    @Environment(AppSession.self) private var session
     @Binding var draft: String
     let roomName: String
     let onSend: () async -> Void
@@ -861,6 +862,7 @@ struct ComposerBar: View {
 
     @State private var showFilePicker = false
     @State private var showPreview = false
+    @State private var mentions = MentionController()
     @FocusState private var isFocused: Bool
 
     private var hasDraft: Bool {
@@ -880,16 +882,7 @@ struct ComposerBar: View {
                     .padding(.bottom, 6)
             }
 
-            TextField("Message \(roomName)", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.rcBody)
-                .lineLimit(1...10)
-                .frame(minHeight: 44, alignment: .topLeading)
-                .padding(.horizontal, 12)
-                .focused($isFocused)
-                .onSubmit {
-                    Task { await onSend() }
-                }
+            messageField
 
             HStack(spacing: 8) {
                 if onAttach != nil {
@@ -918,6 +911,15 @@ struct ComposerBar: View {
                 .strokeBorder(
                     isFocused ? Color.rcStrokeHighlight : Color.rcStrokeLight,
                     lineWidth: 1))
+        .overlay(alignment: .top) {
+            if mentions.isVisible {
+                MentionPopup(mentions: mentions, onPick: acceptMention)
+                    // Shift up by the popup's own height so it floats above
+                    // the card, growing upward without pushing the timeline.
+                    .alignmentGuide(.top) { $0[.bottom] }
+                    .padding(.bottom, 6)
+            }
+        }
         .animation(.easeOut(duration: 0.15), value: isFocused)
         .padding(.horizontal, 12)
         .padding(.top, 6)
@@ -932,6 +934,39 @@ struct ComposerBar: View {
                 onAttach?(urls)
             }
         }
+    }
+
+    private var messageField: some View {
+        TextField("Message \(roomName)", text: $draft, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(.rcBody)
+            .lineLimit(1...10)
+            .frame(minHeight: 44, alignment: .topLeading)
+            .padding(.horizontal, 12)
+            .focused($isFocused)
+            .onSubmit {
+                // Return is owned by the send button (see sendButton); this
+                // fires only if that shortcut ever misses.
+                if !mentions.isVisible { Task { await onSend() } }
+            }
+            .onChange(of: draft) { _, newValue in scanForMention(in: newValue) }
+            .onChange(of: isFocused) { _, focused in if !focused { mentions.dismiss() } }
+            .onChange(of: roomName) { mentions.dismiss() }
+            .onKeyPress(keys: [.upArrow, .downArrow, .tab, .escape]) { press in
+                handleMentionKey(press.key)
+            }
+    }
+
+    /// Routes navigation keys to the mention popup while it's open; otherwise
+    /// lets them pass through to normal field/focus behavior.
+    private func handleMentionKey(_ key: KeyEquivalent) -> KeyPress.Result {
+        guard mentions.isVisible else { return .ignored }
+        if key == .upArrow { mentions.moveSelection(-1) }
+        else if key == .downArrow { mentions.moveSelection(1) }
+        else if key == .tab { acceptMention() }
+        else if key == .escape { mentions.dismiss() }
+        else { return .ignored }
+        return .handled
     }
 
     /// The small always-visible formatting toolbar across the card's top.
@@ -980,9 +1015,17 @@ struct ComposerBar: View {
     }
 
     private var sendButton: some View {
-        // The one brand-tinted glass control in the room, per HIG.
+        // The one brand-tinted glass control in the room, per HIG. It also
+        // owns Return: AppKit runs its key equivalent before the field editor
+        // or .onKeyPress, so an open mention popup accepts here rather than
+        // fighting the key. A visible popup implies an @term, so hasDraft is
+        // true and the button stays enabled.
         Button {
-            Task { await onSend() }
+            if mentions.isVisible {
+                acceptMention()
+            } else {
+                Task { await onSend() }
+            }
         } label: {
             Image(systemName: "paperplane.fill")
                 .font(.system(size: 11, weight: .semibold))
@@ -993,6 +1036,30 @@ struct ComposerBar: View {
         .disabled(!hasDraft)
         .keyboardShortcut(.return, modifiers: [])
         .help("Send")
+    }
+
+    /// Re-scans the draft around the caret for a mention token and drives the
+    /// controller. Skips programmatic edits (edit/send reset the draft while
+    /// unfocused), which would otherwise false-trigger.
+    private func scanForMention(in text: String) {
+        guard isFocused else { mentions.dismiss(); return }
+        let caret = ComposerMarkdown.currentSelection()?.location
+            ?? (text as NSString).length
+        let client = session.client
+        mentions.update(text: text, caretUTF16: caret) { term in
+            guard let client else { return [] }
+            return try await client.autocompleteUsers(term: term)
+        }
+    }
+
+    /// Replaces the active `@term` with the highlighted user's `@username `,
+    /// via the field editor so `$draft` stays in sync.
+    private func acceptMention() {
+        guard mentions.isVisible,
+              let range = mentions.activeRange,
+              let username = mentions.selectedUser?.username else { return }
+        ComposerMarkdown.replaceRange(range, with: "@\(username) ")
+        mentions.dismiss()
     }
 
     private var previewPane: some View {
@@ -1039,5 +1106,78 @@ struct ComposerToolButton: View {
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .help(help)
+    }
+}
+
+/// Floating `@mention` suggestion list, drawn above the composer card.
+///
+/// Deliberately a plain `VStack` (not a `List`) with `.onTapGesture` rows
+/// (not `Button`s): both avoid moving AppKit first responder, which would
+/// blur the text field and break the field-editor caret access the composer
+/// relies on to insert the mention.
+struct MentionPopup: View {
+    @Bindable var mentions: MentionController
+    let onPick: () -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(mentions.results.enumerated()), id: \.element._id) { index, user in
+                        MentionRow(user: user, isSelected: index == mentions.selection)
+                            .id(user._id)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                mentions.selection = index
+                                onPick()
+                            }
+                            .onHover { if $0 { mentions.selection = index } }
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+            .onChange(of: mentions.selection) { _, index in
+                if mentions.results.indices.contains(index) {
+                    proxy.scrollTo(mentions.results[index]._id)
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .background(
+            RoundedRectangle(cornerRadius: RCRadius.large)
+                .fill(Color.rcSurfaceLight))
+        .overlay(
+            RoundedRectangle(cornerRadius: RCRadius.large)
+                .strokeBorder(Color.rcStrokeLight, lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+    }
+}
+
+/// One `@mention` suggestion row: avatar, display name, and `@username`.
+struct MentionRow: View {
+    let user: MentionUser
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let username = user.username {
+                AvatarView(username: username)
+            }
+            Text(user.name ?? user.username ?? "?")
+                .font(.rcBody)
+                .foregroundStyle(Color.rcFontTitlesLabels)
+                .lineLimit(1)
+            if let username = user.username {
+                Text("@\(username)")
+                    .font(.rcCaption)
+                    .foregroundStyle(Color.rcFontSecondaryInfo)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(isSelected ? Color.rcPrimary.opacity(0.12) : .clear)
+        .contentShape(Rectangle())
     }
 }
