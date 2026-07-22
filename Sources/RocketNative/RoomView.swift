@@ -870,6 +870,32 @@ struct ComposerBar: View {
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Suggestions sit above the composer as their own card so they
+            // never cover what's being typed; they push the timeline up
+            // rather than overlaying it.
+            if mentions.isVisible {
+                MentionPopup(mentions: mentions, onPick: acceptMention)
+                    .padding(.horizontal, 12)
+            }
+            composerCard
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+                .padding(.bottom, 10)
+                .background(.bar)
+        }
+        .fileImporter(
+            isPresented: $showFilePicker,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                onAttach?(urls)
+            }
+        }
+    }
+
+    private var composerCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             formattingToolbar
                 .padding(.horizontal, 10)
@@ -911,29 +937,7 @@ struct ComposerBar: View {
                 .strokeBorder(
                     isFocused ? Color.rcStrokeHighlight : Color.rcStrokeLight,
                     lineWidth: 1))
-        .overlay(alignment: .top) {
-            if mentions.isVisible {
-                MentionPopup(mentions: mentions, onPick: acceptMention)
-                    // Shift up by the popup's own height so it floats above
-                    // the card, growing upward without pushing the timeline.
-                    .alignmentGuide(.top) { $0[.bottom] }
-                    .padding(.bottom, 6)
-            }
-        }
         .animation(.easeOut(duration: 0.15), value: isFocused)
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
-        .padding(.bottom, 10)
-        .background(.bar)
-        .fileImporter(
-            isPresented: $showFilePicker,
-            allowedContentTypes: [.item],
-            allowsMultipleSelection: true
-        ) { result in
-            if case .success(let urls) = result {
-                onAttach?(urls)
-            }
-        }
     }
 
     private var messageField: some View {
