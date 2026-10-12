@@ -1,6 +1,10 @@
-# This machine has Command Line Tools only (no full Xcode), so `swift test`
-# needs explicit search paths for Testing.framework and its interop dylib.
-CLT_DEV := /Library/Developer/CommandLineTools/Library/Developer
+# Tests run on the Command Line Tools toolchain with explicit search paths
+# for its Testing.framework and interop dylib. DEVELOPER_DIR pins that
+# toolchain even when xcode-select points at Xcode: Xcode's compiler can't use
+# the CLT Testing macros, and its own `swift test` fails codesigning the
+# .xctest here (file-provider xattrs on the repo folder).
+CLT := /Library/Developer/CommandLineTools
+CLT_DEV := $(CLT)/Library/Developer
 TEST_FLAGS := -Xswiftc -F$(CLT_DEV)/Frameworks \
               -Xlinker -F$(CLT_DEV)/Frameworks \
               -Xlinker -rpath -Xlinker $(CLT_DEV)/Frameworks \
@@ -14,7 +18,7 @@ build:
 	swift build
 
 test:
-	swift test $(TEST_FLAGS)
+	DEVELOPER_DIR=$(CLT) swift test $(TEST_FLAGS)
 
 cli:
 	swift run rc-cli $(ARGS)

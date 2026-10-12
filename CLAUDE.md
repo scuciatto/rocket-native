@@ -18,8 +18,10 @@ Keep the two in sync when adding backlog items (`gh project item-create 2
 ## Commands
 
 - Build: `make build` (or `swift build`)
-- Test: `make test` — NOT plain `swift test`; this machine has CLT only (no
-  Xcode), so tests need the framework search-path flags in the Makefile.
+- Test: `make test` — NOT plain `swift test`. It pins the Command Line Tools
+  toolchain (`DEVELOPER_DIR`) plus framework search-path flags; Xcode's
+  toolchain can't use the CLT Testing macros and fails codesigning the
+  .xctest in this folder.
 - CLI smoke tool: `swift run rc-cli <command>`
 - App: `make app` assembles .build/RocketNative.app without Xcode (SPM release
   build + App/Info.plist + ad-hoc codesign); `make run-app` also launches it.
