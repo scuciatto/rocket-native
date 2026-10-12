@@ -24,23 +24,86 @@ actor RESTClient {
         self.rateLimiter = RateLimiter(clock: clock)
     }
 
+    /// Answers mid-session 2FA challenges on authenticated calls. Login,
+    /// resume and `sendEmailCode` (`requiresAuth: false`) never consult it.
+    private var twoFactorProvider: TwoFactorCodeProvider?
+
+    func setTwoFactorProvider(_ provider: TwoFactorCodeProvider?) {
+        twoFactorProvider = provider
+    }
+
     func send<R>(_ endpoint: Endpoint<R>) async throws -> R {
         let request = try await buildRequest(for: endpoint)
-        return try await execute(request, path: endpoint.path, allowRateLimitRetry: true)
+        do {
+            return try await execute(request, path: endpoint.path, allowRateLimitRetry: true)
+        } catch RocketChatError.twoFactorRequired(let challenge) {
+            guard endpoint.requiresAuth, let provider = twoFactorProvider else {
+                throw RocketChatError.twoFactorRequired(challenge)
+            }
+            return try await resolve(challenge, with: provider, expecting: R.self)
+        }
     }
 
     /// Replays a 2FA-challenged request with the code headers attached.
     /// `R` must match the response type of the endpoint that raised the challenge.
+    /// The headers live only on this one-off request, never in shared state,
+    /// so later calls can't leak a stale code.
     func replay<R: Decodable & Sendable>(
         _ challenge: TwoFactorChallenge,
         code: String,
-        method: TwoFactorMethod,
+        method: TwoFactorMethod? = nil,
         expecting: R.Type
     ) async throws -> R {
+        let method = method ?? challenge.method
         var request = challenge.request
-        request.setValue(code, forHTTPHeaderField: "x-2fa-code")
+        request.setValue(method.headerValue(for: code), forHTTPHeaderField: "x-2fa-code")
         request.setValue(method.rawValue, forHTTPHeaderField: "x-2fa-method")
-        return try await execute(request, path: challenge.endpointPath, allowRateLimitRetry: true)
+        do {
+            return try await execute(
+                request, path: challenge.endpointPath, allowRateLimitRetry: true)
+        } catch RocketChatError.twoFactorInvalid(let fresh) {
+            throw RocketChatError.twoFactorInvalid(fresh.inheriting(from: challenge))
+        }
+    }
+
+    /// Prompt-and-replay loop for a mid-session challenge: re-prompts on a
+    /// wrong code, throws `.cancelled` when the provider returns nil, and
+    /// tells the provider the challenge ended exactly once, however it ends.
+    private func resolve<R: Decodable & Sendable>(
+        _ challenge: TwoFactorChallenge,
+        with provider: TwoFactorCodeProvider,
+        expecting: R.Type
+    ) async throws -> R {
+        var current = challenge
+        let outcome: Result<R, Error>
+        do {
+            outcome = .success(
+                try await promptUntilAccepted(&current, with: provider, expecting: R.self))
+        } catch {
+            outcome = .failure(error)
+        }
+        // `defer` can't await, so the single end-of-challenge call sits here.
+        await provider.challengeEnded(current)
+        return try outcome.get()
+    }
+
+    /// Asks for codes until one is accepted; `current` tracks the latest
+    /// (retry) challenge so the caller can report the one that ended.
+    private func promptUntilAccepted<R: Decodable & Sendable>(
+        _ current: inout TwoFactorChallenge,
+        with provider: TwoFactorCodeProvider,
+        expecting: R.Type
+    ) async throws -> R {
+        while true {
+            guard let code = await provider.code(for: current) else {
+                throw RocketChatError.cancelled
+            }
+            do {
+                return try await replay(current, code: code, expecting: R.self)
+            } catch RocketChatError.twoFactorInvalid(let fresh) {
+                current = fresh
+            }
+        }
     }
 
     // MARK: - Internals
@@ -93,7 +156,14 @@ actor RESTClient {
                 throw RocketChatError.decoding(description: "\(error)", endpoint: path)
             }
         case 401:
-            throw RocketChatError.notAuthenticated
+            // Login reports 2FA as a 401; anything else is bad credentials.
+            let error = errorFor(status: 401, data: data, request: request, path: path)
+            switch error {
+            case .twoFactorRequired, .twoFactorInvalid, .httpError(_, "totp-max-attempts", _):
+                throw error
+            default:
+                throw RocketChatError.notAuthenticated
+            }
         case 429:
             let retryDate = await rateLimiter.retryDate(for: path, response: response)
             guard allowRateLimitRetry else {
@@ -110,8 +180,10 @@ actor RESTClient {
         status: Int, data: Data, request: URLRequest, path: String
     ) -> RocketChatError {
         let body = try? decoder.decode(APIErrorBody.self, from: data)
+        // REST calls put the code in `errorType`; the login envelope uses `error`.
+        let code = body?.errorType ?? body?.error
 
-        if body?.errorType == "totp-required" || body?.errorType == "totp-invalid" {
+        if code == "totp-required" || code == "totp-invalid" {
             var cleanRequest = request
             cleanRequest.setValue(nil, forHTTPHeaderField: "x-2fa-code")
             cleanRequest.setValue(nil, forHTTPHeaderField: "x-2fa-method")
@@ -121,16 +193,18 @@ actor RESTClient {
                 defaultMethod: body?.details?.method
                     .flatMap(TwoFactorMethod.init(rawValue:)),
                 emailCodeGenerated: body?.details?.codeGenerated ?? false,
+                emailOrUsername: body?.details?.emailOrUsername,
+                isRetry: code == "totp-invalid",
                 request: cleanRequest,
                 endpointPath: path)
-            return body?.errorType == "totp-required"
+            return code == "totp-required"
                 ? .twoFactorRequired(challenge)
                 : .twoFactorInvalid(challenge)
         }
 
         return .httpError(
             status: status,
-            errorType: body?.errorType,
+            errorType: code == "totp-max-attempts" ? code : body?.errorType,
             message: body?.message ?? body?.error)
     }
 }

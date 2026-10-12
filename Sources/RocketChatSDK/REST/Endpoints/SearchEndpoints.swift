@@ -69,6 +69,10 @@ struct UserInfoResponse: Decodable, Sendable {
     var user: UserProfile
 }
 
+struct PersonalAccessTokenResponse: Decodable, Sendable {
+    var token: String
+}
+
 extension API {
     enum Search {
         static func chatSearch(
@@ -116,6 +120,25 @@ extension API {
 
         static func info(userId: String) -> Endpoint<UserInfoResponse> {
             .get("users.info", query: [URLQueryItem(name: "userId", value: userId)])
+        }
+
+        static func generatePersonalAccessToken(
+            name: String, bypassTwoFactor: Bool
+        ) -> Endpoint<PersonalAccessTokenResponse> {
+            struct Body: Encodable {
+                var tokenName: String
+                var bypassTwoFactor: Bool
+            }
+            return .post(
+                "users.generatePersonalAccessToken",
+                body: Body(tokenName: name, bypassTwoFactor: bypassTwoFactor))
+        }
+
+        static func removePersonalAccessToken(name: String) -> Endpoint<SuccessResponse> {
+            struct Body: Encodable {
+                var tokenName: String
+            }
+            return .post("users.removePersonalAccessToken", body: Body(tokenName: name))
         }
     }
 }

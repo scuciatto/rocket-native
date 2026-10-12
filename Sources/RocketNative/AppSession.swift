@@ -78,7 +78,13 @@ final class AppSession {
     /// Presents the add-server login sheet.
     var showAddServer = false
     let notifications = NotificationManager()
+    /// Mid-session 2FA prompts from any account's client.
+    let twoFactor = TwoFactorPresenter()
     var loginError: String?
+    /// Informational line on the login 2FA sheet (e.g. after a resend).
+    private(set) var twoFactorNotice: String?
+    /// A login 2FA code is being verified.
+    private(set) var isVerifyingTwoFactor = false
 
     /// Last used server, prefilled on the login form.
     var serverURLString: String {
@@ -171,12 +177,16 @@ final class AppSession {
         }
     }
 
-    func submitTwoFactor(code: String, method: TwoFactorMethod) async {
+    func submitTwoFactor(code: String) async {
         guard case .twoFactor(let challenge) = loginFlow,
               let pendingLogin else { return }
+        isVerifyingTwoFactor = true
+        twoFactorNotice = nil
+        defer { isVerifyingTwoFactor = false }
         do {
+            // nil method: the server verifies login codes with challenge.method.
             let profile = try await pendingLogin.client.completeTwoFactorLogin(
-                challenge, code: code, method: method)
+                challenge, code: code, method: nil)
             await adopt(account: ServerAccount(
                 serverURL: pendingLogin.server, client: pendingLogin.client,
                 cacheUnavailable: pendingLogin.cacheUnavailable,
@@ -184,8 +194,12 @@ final class AppSession {
                 credentials: await pendingLogin.client.credentials))
             finishLogin()
         } catch RocketChatError.twoFactorInvalid(let fresh) {
-            loginError = "Invalid code — try again."
+            // The retry challenge (isRetry) carries the inline error.
+            loginError = nil
             loginFlow = .twoFactor(fresh)
+        } catch RocketChatError.httpError(_, "totp-max-attempts", _) {
+            loginError = "Too many invalid codes. Sign in again."
+            loginFlow = .idle
         } catch {
             loginError = friendlyMessage(error)
             loginFlow = .idle
@@ -193,13 +207,37 @@ final class AppSession {
     }
 
     func resendEmailCode() async {
-        guard let pendingLogin else { return }
-        try? await pendingLogin.client.sendEmailCode(emailOrUsername: pendingLogin.user)
+        guard case .twoFactor(let challenge) = loginFlow, let pendingLogin else { return }
+        do {
+            try await pendingLogin.client.sendEmailCode(
+                emailOrUsername: challenge.emailOrUsername ?? pendingLogin.user)
+            twoFactorNotice = "Code sent! Please check your email."
+        } catch {
+            loginError = friendlyMessage(error)
+        }
     }
 
     func cancelTwoFactor() {
         loginFlow = .idle
         loginError = nil
+        twoFactorNotice = nil
+    }
+
+    /// Resends the email code for a mid-session prompt, via its account.
+    func resendTwoFactorEmail(for request: TwoFactorPresenter.Request) async {
+        guard let account = accounts.first(where: { $0.id == request.accountId }) else { return }
+        let identity = request.challenge.emailOrUsername
+            ?? account.profile.username ?? account.profile._id
+        do {
+            try await account.client.sendEmailCode(emailOrUsername: identity)
+            if twoFactor.current?.id == request.id {
+                twoFactor.notice = "Code sent! Please check your email."
+            }
+        } catch {
+            if twoFactor.current?.id == request.id {
+                twoFactor.notice = friendlyMessage(error)
+            }
+        }
     }
 
     // MARK: - Account lifecycle
@@ -209,6 +247,7 @@ final class AppSession {
         guard let index = accounts.firstIndex(where: { $0.id == accountId }) else { return }
         let account = accounts.remove(at: index)
         notifications.unregister(accountId: accountId)
+        twoFactor.cancelAll(accountId: accountId)
         persistServerList()
         if activeAccountId == accountId {
             activeAccountId = accounts.first?.id
@@ -243,6 +282,9 @@ final class AppSession {
         accounts.append(account)
         activeAccountId = account.id
         persistServerList()
+        await account.client.setTwoFactorProvider(AccountTwoFactorProvider(
+            accountId: account.id, accountName: account.displayName,
+            presenter: twoFactor))
         await account.client.startSync()
         await account.client.enablePushSignals()
         notifications.register(
@@ -253,6 +295,7 @@ final class AppSession {
     private func finishLogin() {
         loginFlow = .idle
         loginError = nil
+        twoFactorNotice = nil
         pendingLogin = nil
         showAddServer = false
     }

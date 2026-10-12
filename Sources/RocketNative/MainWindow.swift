@@ -21,6 +21,16 @@ struct MainWindow: View {
         .sheet(isPresented: $session.showAddServer) {
             LoginView(isSheet: true)
         }
+        .sheet(item: twoFactorRequest) { request in
+            TwoFactorSheet(
+                challenge: request.challenge,
+                subtitle: session.accounts.count > 1 ? request.accountName : nil,
+                notice: session.twoFactor.notice,
+                isVerifying: session.twoFactor.isVerifying,
+                onSubmit: { session.twoFactor.submit(code: $0) },
+                onCancel: { session.twoFactor.cancel() },
+                onResend: { Task { await session.resendTwoFactorEmail(for: request) } })
+        }
         .onChange(of: session.activeAccountId) { _, accountId in
             session.notifications.activeAccountId = accountId
             session.notifications.activeRoomId = session.activeAccount?.selectedRoomId
@@ -36,6 +46,13 @@ struct MainWindow: View {
         .task {
             session.notifications.activeAccountId = session.activeAccount?.id
         }
+    }
+
+    /// Mid-session 2FA prompt; a system dismissal counts as cancel.
+    private var twoFactorRequest: Binding<TwoFactorPresenter.Request?> {
+        Binding(
+            get: { session.twoFactor.current },
+            set: { if $0 == nil { session.twoFactor.cancel() } })
     }
 }
 

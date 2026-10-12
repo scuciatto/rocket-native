@@ -48,6 +48,57 @@ func promptPassword(_ prompt: String) -> String {
     return String(cString: raw)
 }
 
+/// Answers mid-session 2FA challenges on stdin. The password method reads
+/// without echo; for email, `r` asks the server to resend the code.
+struct CLITwoFactorProvider: TwoFactorCodeProvider {
+    let client: @Sendable () -> RocketChatClient?
+    let username: String?
+
+    func code(for challenge: TwoFactorChallenge) async -> String? {
+        if challenge.isRetry {
+            print(challenge.method == .password
+                ? "Incorrect password, try again." : "Invalid code, try again.")
+        } else {
+            print("Two-factor authentication required.")
+            if challenge.method == .email, challenge.emailCodeGenerated {
+                print("A code was sent to your email address.")
+            }
+        }
+        while true {
+            let code: String
+            switch challenge.method {
+            case .password:
+                code = promptPassword("Password: ")
+            case .email:
+                code = promptLine("2FA code (email, r to resend): ")
+                    .trimmingCharacters(in: .whitespaces)
+                if code == "r" {
+                    await resend(challenge)
+                    continue
+                }
+            case .totp:
+                code = promptLine("2FA code (totp): ").trimmingCharacters(in: .whitespaces)
+            }
+            // Empty input (or EOF) cancels the call.
+            return code.isEmpty ? nil : code
+        }
+    }
+
+    private func resend(_ challenge: TwoFactorChallenge) async {
+        guard let identity = challenge.emailOrUsername ?? username,
+              let client = client() else {
+            print("Cannot resend: unknown username.")
+            return
+        }
+        do {
+            try await client.sendEmailCode(emailOrUsername: identity)
+            print("Code sent! Please check your email.")
+        } catch {
+            print("Resend failed: \(describe(error))")
+        }
+    }
+}
+
 func authenticatedClient() async -> (RocketChatClient, CLISession) {
     guard let session = loadSession() else {
         fail("no session — run `rc-cli login <server-url> <username>` first")
@@ -67,6 +118,11 @@ func authenticatedClient() async -> (RocketChatClient, CLISession) {
     }
     await client.adopt(credentials: AuthCredentials(
         authToken: session.authToken, userId: session.userId))
+    // Weak: the provider lives inside the client, so a strong reference
+    // would make a cycle.
+    weak let weakClient = client
+    await client.setTwoFactorProvider(CLITwoFactorProvider(
+        client: { weakClient }, username: session.username))
     return (client, session)
 }
 
@@ -75,6 +131,10 @@ func describe(_ error: Error) -> String {
     switch rcError {
     case .network(let underlying):
         return "network failure: \(underlying.localizedDescription)"
+    case .httpError(_, "totp-max-attempts", _):
+        return "too many invalid 2FA codes — start over"
+    case .cancelled:
+        return "cancelled"
     case .httpError(let status, let type, let message):
         return "HTTP \(status) \(type ?? "") \(message ?? "")"
     case .notAuthenticated:
@@ -103,13 +163,23 @@ func runLogin(server: String, user: String) async {
             print("A code was sent to your email address.")
         }
         while true {
-            let method = challenge.defaultMethod
-                ?? challenge.availableMethods.first ?? .totp
-            let code = promptLine("2FA code (\(method.rawValue)): ")
+            // The server verifies login codes with its first active method.
+            let method = challenge.method
+            let code = promptLine(method == .email
+                ? "2FA code (email, r to resend): " : "2FA code (\(method.rawValue)): ")
                 .trimmingCharacters(in: .whitespaces)
+            if method == .email, code == "r" {
+                do {
+                    try await client.sendEmailCode(
+                        emailOrUsername: challenge.emailOrUsername ?? user)
+                    print("Code sent! Please check your email.")
+                } catch {
+                    print("Resend failed: \(describe(error))")
+                }
+                continue
+            }
             do {
-                profile = try await client.completeTwoFactorLogin(
-                    challenge, code: code, method: method)
+                profile = try await client.completeTwoFactorLogin(challenge, code: code)
                 break
             } catch RocketChatError.twoFactorInvalid(let fresh) {
                 print("Invalid code, try again.")
@@ -335,6 +405,27 @@ func runUpload(room nameOrId: String, path: String, text: String?) async {
     }
 }
 
+func runPATCreate(name: String) async {
+    let (client, _) = await authenticatedClient()
+    do {
+        let token = try await client.generatePersonalAccessToken(name: name)
+        print("token:   \(token)")
+        print("user id: \(await client.credentials?.userId ?? "-")")
+    } catch {
+        fail(describe(error))
+    }
+}
+
+func runPATRemove(name: String) async {
+    let (client, _) = await authenticatedClient()
+    do {
+        try await client.removePersonalAccessToken(name: name)
+        print("Removed token \"\(name)\".")
+    } catch {
+        fail(describe(error))
+    }
+}
+
 func runLogout() async {
     let (client, _) = await authenticatedClient()
     try? await client.logout()
@@ -386,6 +477,14 @@ case "directory":
     let type = arguments.count > 2
         ? DirectoryType(rawValue: arguments[2]) ?? .channels : .channels
     await runDirectory(text: arguments[1], type: type)
+case "pat":
+    let usage = "usage: rc-cli pat create|remove <name>"
+    guard arguments.count == 3 else { fail(usage) }
+    switch arguments[1] {
+    case "create": await runPATCreate(name: arguments[2])
+    case "remove": await runPATRemove(name: arguments[2])
+    default: fail(usage)
+    }
 default:
     print("""
     rc-cli — Rocket.Chat SDK smoke tool
@@ -401,6 +500,8 @@ default:
       rc-cli search <room> <text...>           Search messages in a room
       rc-cli spotlight <query...>              Global user/channel search
       rc-cli directory <text> [users|channels|teams]
+      rc-cli pat create <name>                 Create a personal access token (2FA)
+      rc-cli pat remove <name>                 Revoke a personal access token (2FA)
       rc-cli logout                            Invalidate and forget the session
     """)
     exit(arguments.isEmpty ? 0 : 1)

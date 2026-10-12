@@ -145,17 +145,27 @@ public final class RocketChatClient: Sendable {
     }
 
     /// Completes a 2FA-challenged login by replaying it with the user's code.
-    /// Throws `RocketChatError.twoFactorInvalid` (carrying a fresh challenge,
-    /// so the user can retry) when the code is wrong.
+    /// `method` defaults to `challenge.method` (the server verifies login
+    /// codes with its first active method regardless). Throws
+    /// `RocketChatError.twoFactorInvalid` (carrying a retry challenge with the
+    /// same `id`) when the code is wrong.
     @discardableResult
     public func completeTwoFactorLogin(
         _ challenge: TwoFactorChallenge,
         code: String,
-        method: TwoFactorMethod
+        method: TwoFactorMethod? = nil
     ) async throws -> UserProfile {
         let response = try await rest.replay(
             challenge, code: code, method: method, expecting: LoginResponse.self)
         return await adoptSession(from: response)
+    }
+
+    /// Installs the prompt used when an authenticated call hits 2FA
+    /// mid-session; the call then replays transparently once a code is
+    /// accepted, or throws `.cancelled` if the user dismisses the prompt.
+    /// Without a provider such calls throw `.twoFactorRequired`.
+    public func setTwoFactorProvider(_ provider: TwoFactorCodeProvider?) async {
+        await rest.setTwoFactorProvider(provider)
     }
 
     /// Asks the server to (re)send an email 2FA code.
@@ -368,6 +378,22 @@ public final class RocketChatClient: Sendable {
 
     public func userInfo(username: String) async throws -> UserProfile {
         try await rest.send(API.Users.info(username: username)).user
+    }
+
+    // MARK: - Personal access tokens
+
+    /// Creates a personal access token and returns its secret (shown once).
+    /// 2FA-protected: answered by the installed `TwoFactorCodeProvider`.
+    public func generatePersonalAccessToken(
+        name: String, bypassTwoFactor: Bool = false
+    ) async throws -> String {
+        try await rest.send(API.Users.generatePersonalAccessToken(
+            name: name, bypassTwoFactor: bypassTwoFactor)).token
+    }
+
+    /// Revokes a personal access token by name. 2FA-protected.
+    public func removePersonalAccessToken(name: String) async throws {
+        _ = try await rest.send(API.Users.removePersonalAccessToken(name: name))
     }
 
     /// Avatar URL for a username. Append the user's `avatarETag` when known so

@@ -86,6 +86,16 @@ Roughly ordered by expected value.
     sync resumes from the fetched page, not the persisted mark, to avoid
     unbounded catch-up responses); consider bounded backfill. Also: cache
     size cap/pruning for very active workspaces.
+20. **Login 2FA on server 9.0** — from 9.0, `applyBreakingChanges` strips the
+    login error body to `{success:false,error:'unauthorized'}`, which would
+    make login 2FA undetectable (it'd read as a wrong password). Re-check the
+    login 401 envelope when 9.0 ships.
+21. **2FA management screen** — turn TOTP / email 2FA on and off from the
+    app (React Native has no such screen either). The SDK already answers
+    mid-session challenges via `TwoFactorCodeProvider`.
+22. **PAT login and management UI** — extends #11: list/create/remove
+    personal access tokens in the app (SDK has create/remove; `rc-cli pat`
+    exercises them) and offer PAT sign-in on the login form.
 
 ## Known v1 limitations (accepted, documented in README)
 
