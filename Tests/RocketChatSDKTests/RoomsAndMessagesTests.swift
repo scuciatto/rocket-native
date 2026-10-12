@@ -84,6 +84,20 @@ private let subscriptionsGetJSON = """
         #expect(rooms[1].favorite)
         #expect(rooms[1].lastMessage?.msg == "see you there")
     }
+
+    @Test func malformedFieldsDropToNilNotTheRoom() throws {
+        let json = #"""
+            {"_id": "r1", "t": "c", "name": "odd", "lm": "2026-01-01T00:00:00.000Z",
+             "u": {"_id": null, "username": "ghost"},
+             "lastMessage": {"msg": "no id here", "ts": "2026-01-01T00:00:00.000Z"}}
+            """#
+        let room = try RCJSON.decoder().decode(Room.self, from: Data(json.utf8))
+        #expect(room._id == "r1")
+        #expect(room.name == "odd")
+        #expect(room.lm != nil)
+        #expect(room.lastMessage == nil)
+        #expect(room.u == nil)
+    }
 }
 
 private let syncMessagesJSON = """
