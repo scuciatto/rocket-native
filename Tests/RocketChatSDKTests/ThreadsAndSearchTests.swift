@@ -149,6 +149,31 @@ private func makeClient(_ transport: MockHTTPTransport) async -> RocketChatClien
         #expect(page.total == 42)
     }
 
+    @Test func autocompleteUsersSendsTermSelectorAndDecodesItems() async throws {
+        let transport = MockHTTPTransport()
+        transport.expect { request in
+            #expect(request.url?.path().hasSuffix("users.autocomplete") == true)
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                .queryItems
+            let selector = query?.first { $0.name == "selector" }?.value
+            #expect(selector?.contains(#""term":"ali""#) == true)
+            return (Data("""
+                {"items": [
+                  {"_id": "u1", "username": "alice", "name": "Alice",
+                   "nickname": "al", "status": "online", "avatarETag": "e1"},
+                  {"_id": "u2", "username": "alison", "name": "Alison"}
+                ], "success": true}
+                """.utf8),
+                MockHTTPTransport.httpResponse(url: request.url!, status: 200))
+        }
+
+        let client = await makeClient(transport)
+        let users = try await client.autocompleteUsers(term: "ali")
+        #expect(users.map(\.username) == ["alice", "alison"])
+        #expect(users.first?.name == "Alice")
+        #expect(users.first?.nickname == "al")
+    }
+
     @Test func avatarURLIncludesFormatSizeAndEtag() async {
         let client = await makeClient(MockHTTPTransport())
         let url = client.avatarURL(username: "felipe", size: 64, etag: "xyz")

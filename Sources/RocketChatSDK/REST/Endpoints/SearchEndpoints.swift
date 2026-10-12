@@ -16,6 +16,23 @@ public struct SpotlightResult: Decodable, Sendable {
     }
 }
 
+/// One user match from `users.autocomplete`, the workspace-wide mention
+/// source. Lighter than `DirectoryEntry` and carries only what a mention
+/// row needs.
+public struct MentionUser: Decodable, Sendable, Identifiable, Equatable {
+    public var id: String { _id }
+    public let _id: String
+    public var username: String?
+    public var name: String?
+    public var nickname: String?
+    public var status: String?
+    public var avatarETag: String?
+}
+
+struct UsersAutocompleteResponse: Decodable, Sendable {
+    var items: [MentionUser]
+}
+
 public enum DirectoryType: String, Sendable {
     case users
     case channels
@@ -84,6 +101,17 @@ extension API {
     enum Users {
         static func info(username: String) -> Endpoint<UserInfoResponse> {
             .get("users.info", query: [URLQueryItem(name: "username", value: username)])
+        }
+
+        /// Workspace-wide user autocomplete for `@mention` suggestions. The
+        /// `selector` is a JSON string (distinct from the banned generic
+        /// `query`/`fields` params); `term` is pre-restricted to username
+        /// characters by the caller, so no JSON escaping is needed.
+        static func autocomplete(term: String) -> Endpoint<UsersAutocompleteResponse> {
+            let selector = #"{"term":"\#(term)","exceptions":[]}"#
+            return .get("users.autocomplete", query: [
+                URLQueryItem(name: "selector", value: selector),
+            ])
         }
 
         static func info(userId: String) -> Endpoint<UserInfoResponse> {

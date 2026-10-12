@@ -331,6 +331,12 @@ public final class RocketChatClient: Sendable {
         try await rest.send(API.Search.spotlight(query: query))
     }
 
+    /// Workspace-wide user autocomplete for `@mention` suggestions, filtered
+    /// server-side by `term`.
+    public func autocompleteUsers(term: String) async throws -> [MentionUser] {
+        try await rest.send(API.Users.autocomplete(term: term)).items
+    }
+
     /// Workspace directory listing (users, channels, or teams).
     public func directory(
         text: String, type: DirectoryType = .channels, count: Int = 20, offset: Int = 0
