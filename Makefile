@@ -11,8 +11,11 @@ TEST_FLAGS := -Xswiftc -F$(CLT_DEV)/Frameworks \
               -Xlinker -rpath -Xlinker $(CLT_DEV)/usr/lib
 
 APP_BUNDLE := .build/RocketNative.app
+# Stable self-signed identity (see `make signing-cert`). Ad-hoc signatures
+# change every build, so the Keychain re-prompts for each stored token.
+SIGN_IDENTITY ?= RocketNative Local Signing
 
-.PHONY: build test cli app run-app clean
+.PHONY: build test cli app run-app signing-cert clean
 
 build:
 	swift build
@@ -23,18 +26,28 @@ test:
 cli:
 	swift run rc-cli $(ARGS)
 
-# Assemble the .app bundle without Xcode (release build, ad-hoc signed).
+# Assemble the .app bundle without Xcode (release build). Signed with
+# $(SIGN_IDENTITY) when present, ad-hoc otherwise.
 app:
 	swift build -c release --product RocketNative
 	rm -rf $(APP_BUNDLE)
 	mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	cp App/Info.plist $(APP_BUNDLE)/Contents/
 	cp .build/release/RocketNative $(APP_BUNDLE)/Contents/MacOS/
-	codesign --force -s - $(APP_BUNDLE)
+	@if security find-identity -v -p codesigning | grep -q "\"$(SIGN_IDENTITY)\""; then \
+		codesign --force -s "$(SIGN_IDENTITY)" $(APP_BUNDLE); \
+	else \
+		codesign --force -s - $(APP_BUNDLE); \
+		echo "Ad-hoc signed — run 'make signing-cert' once to stop Keychain password prompts"; \
+	fi
 	@echo "Built $(APP_BUNDLE) — run with: open $(APP_BUNDLE)"
 
 run-app: app
 	open $(APP_BUNDLE)
+
+# One-time per machine: create the stable signing identity used by `app`.
+signing-cert:
+	scripts/make-signing-cert.sh "$(SIGN_IDENTITY)"
 
 clean:
 	swift package clean

@@ -93,8 +93,10 @@ in the Keychain; the SDK never writes them anywhere.
 
 ## The app
 
-`make run-app` builds and launches **RocketNative.app** (release, ad-hoc
-signed, assembled without Xcode — ~3 MB bundle, ~95 MB RSS at launch).
+`make run-app` builds and launches **RocketNative.app** (release, assembled
+without Xcode — ~3 MB bundle, ~95 MB RSS at launch). Run `make signing-cert`
+once per machine: it creates a local self-signed identity so rebuilt apps keep
+the same signature and the Keychain stops asking for your password on launch.
 
 Features: login with 2FA (TOTP + email code sheet, mid-session prompts), Keychain session resume,
 live sidebar with unread/mention badges, message timeline with markdown
