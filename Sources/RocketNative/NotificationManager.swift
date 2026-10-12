@@ -129,7 +129,7 @@ final class NotificationManager {
             guard room.id != suppressedRoomId else { return nil }
 
             let sender = last.u.name ?? last.u.username ?? "Someone"
-            let text = last.msg.isEmpty ? "Sent an attachment" : String(last.msg.prefix(140))
+            let text = last.msg.isEmpty ? "Sent an attachment" : String(EmojiMap.replacingShortcodes(in: last.msg).prefix(140))
             let isDirect = room.type == .directMessage
             return Event(
                 roomId: room.id,

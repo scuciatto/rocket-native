@@ -17,6 +17,7 @@ final class ServerAccount: Identifiable {
     private(set) var credentials: AuthCredentials?
     /// Sidebar selection, kept so switching servers and back restores context.
     var selectedRoomId: String?
+    let emojis: CustomEmojiStore
 
     init(
         serverURL: URL, client: RocketChatClient, cacheUnavailable: Bool,
@@ -25,6 +26,7 @@ final class ServerAccount: Identifiable {
         self.id = serverURL.host() ?? serverURL.absoluteString
         self.serverURL = serverURL
         self.client = client
+        self.emojis = CustomEmojiStore(client: client)
         self.cacheUnavailable = cacheUnavailable
         self.profile = profile
         self.credentials = credentials
@@ -270,6 +272,7 @@ final class AppSession {
         notifications.appActive = active
         for account in accounts {
             await account.client.setAppActive(active)
+            if active { Task { await account.emojis.refresh() } }
         }
     }
 
@@ -287,6 +290,7 @@ final class AppSession {
             presenter: twoFactor))
         await account.client.startSync()
         await account.client.enablePushSignals()
+        Task { await account.emojis.refresh() }
         notifications.register(
             accountId: account.id, client: account.client,
             selfUserId: account.profile._id)

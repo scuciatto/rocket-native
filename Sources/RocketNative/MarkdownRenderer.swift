@@ -12,6 +12,8 @@ enum MarkdownRenderer {
         case code(language: String?, text: String)
         case quote([AttributedString])
         case list([AttributedString], ordered: Bool)
+        /// A message made only of 1-3 emoji, rendered large.
+        case bigEmoji(AttributedString)
     }
 
     /// nil when the AST is absent/empty — caller falls back to `msg`.
@@ -23,8 +25,10 @@ enum MarkdownRenderer {
 
     private static func block(_ node: JSONValue) -> Block? {
         switch node["type"]?.stringValue {
-        case "PARAGRAPH", "BIG_EMOJI":
+        case "PARAGRAPH":
             return .paragraph(inlines(node["value"]))
+        case "BIG_EMOJI":
+            return .bigEmoji(inlines(node["value"]))
         case "HEADING":
             let level = node["level"]?.numberValue.map(Int.init) ?? 1
             return .heading(level, inlines(node["value"]))
@@ -113,7 +117,19 @@ enum MarkdownRenderer {
             }
             let short = node["shortCode"]?.stringValue
                 ?? node["value"]?["value"]?.stringValue ?? ""
-            return AttributedString(EmojiMap.unicode(forShortCode: short) ?? ":\(short):")
+            // Text is the standard unicode, else `:name:` (also what gets
+            // copied). The run is tagged so the view can swap in a server
+            // custom emoji, which wins over a built-in of the same name, as in
+            // the web and React Native clients. Emoticons carry their text in
+            // `value`, so the custom key prefers it over `shortCode`.
+            var text: AttributedString
+            if let unicode = EmojiMap.unicode(forShortCode: short) {
+                text = AttributedString(unicode)
+            } else {
+                text = styled(":\(short):", style)
+            }
+            text[CustomEmojiAttribute.self] = node["value"]?["value"]?.stringValue ?? short
+            return text
         case "IMAGE":
             return AttributedString()   // inline images render as attachments
         default:
@@ -159,27 +175,36 @@ enum MarkdownRenderer {
     }
 }
 
-/// Minimal shortcode → unicode table covering the most common reactions and
-/// message emoji; everything else renders as `:shortcode:`.
+/// Tags an `AttributedString` run as a custom emoji shortcode, resolved
+/// against the server's `CustomEmojiStore` at render time.
+enum CustomEmojiAttribute: AttributedStringKey {
+    typealias Value = String
+    static let name = "rocketNative.customEmoji"
+}
+
+/// Standard shortcode → unicode, the same emojibase-derived set the web and
+/// React Native clients use (`EmojiShortnames.swift`).
 enum EmojiMap {
-    private static let table: [String: String] = [
-        "smile": "😄", "smiley": "😃", "grinning": "😀", "grin": "😁",
-        "joy": "😂", "rofl": "🤣", "slight_smile": "🙂", "wink": "😉",
-        "blush": "😊", "heart_eyes": "😍", "thinking": "🤔", "neutral_face": "😐",
-        "worried": "😟", "cry": "😢", "sob": "😭", "angry": "😠",
-        "scream": "😱", "sweat_smile": "😅", "tada": "🎉", "confetti_ball": "🎊",
-        "thumbsup": "👍", "+1": "👍", "thumbsdown": "👎", "-1": "👎",
-        "ok_hand": "👌", "clap": "👏", "wave": "👋", "pray": "🙏",
-        "muscle": "💪", "raised_hands": "🙌", "point_up": "☝️", "v": "✌️",
-        "heart": "❤️", "broken_heart": "💔", "fire": "🔥", "star": "⭐",
-        "sparkles": "✨", "zap": "⚡", "boom": "💥", "100": "💯",
-        "check": "✅", "white_check_mark": "✅", "x": "❌", "warning": "⚠️",
-        "question": "❓", "exclamation": "❗", "eyes": "👀", "rocket": "🚀",
-        "bulb": "💡", "wrench": "🔧", "hammer": "🔨", "bug": "🐛",
-        "coffee": "☕", "beer": "🍺", "pizza": "🍕", "cake": "🍰",
-        "dog": "🐶", "cat": "🐱", "ghost": "👻", "robot": "🤖",
-        "sun": "☀️", "moon": "🌙", "rainbow": "🌈", "umbrella": "☔",
-    ]
+    private static let table: [String: String] = {
+        var table: [String: String] = [:]
+        table.reserveCapacity(8_000)
+        for line in emojiShortnameTable.split(separator: "\n") {
+            guard let tab = line.firstIndex(of: "\t") else { continue }
+            table[String(line[..<tab])] = String(line[line.index(after: tab)...])
+        }
+        return table
+    }()
+
+    private nonisolated(unsafe) static let shortcodePattern = /:[-+_a-zA-Z0-9]+:/
+
+    /// Plain-text surfaces (no `md` AST): swaps known `:shortcodes:` for
+    /// unicode and leaves unknown ones, custom emoji included, as typed.
+    static func replacingShortcodes(in text: String) -> String {
+        guard text.contains(":") else { return text }
+        return text.replacing(shortcodePattern) { match in
+            unicode(forShortCode: String(match.output)) ?? String(match.output)
+        }
+    }
 
     static func unicode(forShortCode shortCode: String) -> String? {
         table[shortCode.trimmingCharacters(in: CharacterSet(charactersIn: ":"))]

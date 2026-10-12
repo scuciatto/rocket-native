@@ -100,7 +100,7 @@ the same signature and the Keychain stops asking for your password on launch.
 
 Features: login with 2FA (TOTP + email code sheet, mid-session prompts), Keychain session resume,
 live sidebar with unread/mention badges, message timeline with markdown
-rendering (`md` AST), reactions, avatars, image/file attachments, optimistic
+rendering (`md` AST), standard (~7,900 shortcodes) and custom emoji (messages, big emoji, reactions), reactions, avatars, image/file attachments, optimistic
 sending with failed-state retry markers, file upload (attach button +
 drag-and-drop, via rooms.media), thread inspector (reply counts, context
 menu), ⌘F in-room search, ⌘K global switcher (join channels, start DMs),

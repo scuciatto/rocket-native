@@ -55,7 +55,7 @@ struct RoomSearchSheet: View {
                                     .font(.rcTimestamp)
                                     .foregroundStyle(Color.rcFontAnnotation)
                             }
-                            Text(message.msg)
+                            Text(EmojiMap.replacingShortcodes(in: message.msg))
                                 .font(.rcBody)
                                 .lineLimit(3)
                         }
