@@ -48,6 +48,36 @@ public struct Room: Codable, Sendable, Identifiable, Equatable {
     public var broadcast: Bool? = nil
 }
 
+extension Room {
+    /// Custom only so a malformed field (seen in the wild: a `lastMessage`
+    /// without `_id`, an owner with `_id: null`) decodes as nil instead of
+    /// failing the whole `rooms.get` page. Only `_id` is required.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        _id = try c.decode(String.self, forKey: ._id)
+        t = try? c.decodeIfPresent(RoomType.self, forKey: .t)
+        name = try? c.decodeIfPresent(String.self, forKey: .name)
+        fname = try? c.decodeIfPresent(String.self, forKey: .fname)
+        topic = try? c.decodeIfPresent(String.self, forKey: .topic)
+        description = try? c.decodeIfPresent(String.self, forKey: .description)
+        u = try? c.decodeIfPresent(MiniUser.self, forKey: .u)
+        ro = try? c.decodeIfPresent(Bool.self, forKey: .ro)
+        msgs = try? c.decodeIfPresent(Int.self, forKey: .msgs)
+        usersCount = try? c.decodeIfPresent(Int.self, forKey: .usersCount)
+        usernames = try? c.decodeIfPresent([String].self, forKey: .usernames)
+        uids = try? c.decodeIfPresent([String].self, forKey: .uids)
+        ts = try? c.decodeIfPresent(Date.self, forKey: .ts)
+        lm = try? c.decodeIfPresent(Date.self, forKey: .lm)
+        lastMessage = try? c.decodeIfPresent(Message.self, forKey: .lastMessage)
+        _updatedAt = try? c.decodeIfPresent(Date.self, forKey: ._updatedAt)
+        prid = try? c.decodeIfPresent(String.self, forKey: .prid)
+        teamId = try? c.decodeIfPresent(String.self, forKey: .teamId)
+        archived = try? c.decodeIfPresent(Bool.self, forKey: .archived)
+        encrypted = try? c.decodeIfPresent(Bool.self, forKey: .encrypted)
+        broadcast = try? c.decodeIfPresent(Bool.self, forKey: .broadcast)
+    }
+}
+
 /// The user's per-room state from `subscriptions.get`: unread counts, alert
 /// flags, mention counts, open/favorite state.
 public struct Subscription: Codable, Sendable, Identifiable, Equatable {

@@ -22,16 +22,34 @@ private let loginSuccessJSON = """
 }
 """
 
-private let totpRequiredJSON = """
+/// What `POST /api/v1/login` really returns for a 2FA account: HTTP 401,
+/// the login envelope, with the code in `error` (not `errorType`).
+private let loginTOTPRequiredJSON = """
 {
   "success": false,
-  "error": "TOTP Required [totp-required]",
-  "errorType": "totp-required",
+  "status": "error",
+  "error": "totp-required",
+  "message": "TOTP Required",
   "details": {
     "method": "totp",
     "codeGenerated": false,
-    "availableMethods": ["totp", "email"]
+    "availableMethods": ["totp", "email"],
+    "emailOrUsername": "felipe"
   }
+}
+"""
+
+private let loginTOTPInvalidJSON = """
+{"success": false, "status": "error", "error": "totp-invalid", "message": "TOTP Invalid"}
+"""
+
+/// Any other protected REST route: HTTP 400 with the code in `errorType`.
+private let restTOTPRequiredJSON = """
+{
+  "success": false,
+  "error": "TOTP Required",
+  "errorType": "totp-required",
+  "details": {"method": "email", "codeGenerated": true, "availableMethods": ["email"]}
 }
 """
 
@@ -86,7 +104,7 @@ private let totpRequiredJSON = """
 
     @Test func twoFactorChallengeSurfacesAndReplayCompletesLogin() async throws {
         let transport = MockHTTPTransport()
-        transport.respond(status: 400, json: totpRequiredJSON)
+        transport.respond(status: 401, json: loginTOTPRequiredJSON)
         transport.expect { request in
             #expect(request.value(forHTTPHeaderField: "x-2fa-code") == "123456")
             #expect(request.value(forHTTPHeaderField: "x-2fa-method") == "totp")
@@ -109,9 +127,9 @@ private let totpRequiredJSON = """
 
         #expect(challenge.availableMethods == [.totp, .email])
         #expect(challenge.defaultMethod == .totp)
+        #expect(challenge.emailOrUsername == "felipe")
 
-        let profile = try await client.completeTwoFactorLogin(
-            challenge, code: "123456", method: .totp)
+        let profile = try await client.completeTwoFactorLogin(challenge, code: "123456")
         #expect(profile.username == "felipe")
         let credentials = await client.credentials
         #expect(credentials?.authToken == "tok-123")
@@ -119,11 +137,8 @@ private let totpRequiredJSON = """
 
     @Test func wrongTwoFactorCodeThrowsInvalidWithRetryableChallenge() async throws {
         let transport = MockHTTPTransport()
-        transport.respond(status: 400, json: totpRequiredJSON)
-        transport.respond(status: 400, json: """
-            {"success": false, "error": "TOTP Invalid [totp-invalid]",
-             "errorType": "totp-invalid"}
-            """)
+        transport.respond(status: 401, json: loginTOTPRequiredJSON)
+        transport.respond(status: 401, json: loginTOTPInvalidJSON)
 
         let client = RocketChatClient(
             serverURL: serverURL, transport: transport, clock: TestClock())
@@ -141,6 +156,23 @@ private let totpRequiredJSON = """
             Issue.record("Expected twoFactorInvalid to be thrown")
         } catch RocketChatError.twoFactorInvalid {
             // expected — carries a fresh challenge for retry
+        }
+    }
+
+    @Test func restTwoFactorChallengeReadsErrorType() async throws {
+        let transport = MockHTTPTransport()
+        transport.respond(status: 400, json: restTOTPRequiredJSON)
+        let client = RocketChatClient(
+            serverURL: serverURL, transport: transport, clock: TestClock())
+        await client.adopt(credentials: AuthCredentials(authToken: "t", userId: "u"))
+
+        do {
+            _ = try await client.me()
+            Issue.record("Expected twoFactorRequired to be thrown")
+        } catch let RocketChatError.twoFactorRequired(challenge) {
+            #expect(challenge.method == .email)
+            #expect(challenge.emailCodeGenerated)
+            #expect(!challenge.isRetry)
         }
     }
 

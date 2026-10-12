@@ -55,9 +55,21 @@ let client = RocketChatClient(serverURL: URL(string: "https://chat.example.com")
 do {
     try await client.login(user: "felipe", password: "…")
 } catch RocketChatError.twoFactorRequired(let challenge) {
-    // prompt the user for a code (challenge.availableMethods: totp/email)
-    try await client.completeTwoFactorLogin(challenge, code: "123456", method: .totp)
+    // prompt for a code for challenge.method (totp/email); a wrong code throws
+    // .twoFactorInvalid with a retry challenge (same id, isRetry == true).
+    try await client.completeTwoFactorLogin(challenge, code: "123456")
 }
+
+// Mid-session 2FA (protected calls like personal access tokens): install a
+// provider and the SDK prompts, replays, and re-prompts on a wrong code.
+// For the password method, return the plain password — the SDK sends its
+// SHA-256 hex. Returning nil throws .cancelled.
+struct Prompt: TwoFactorCodeProvider {
+    func code(for challenge: TwoFactorChallenge) async -> String? { /* ask user */ nil }
+}
+await client.setTwoFactorProvider(Prompt())
+let token = try await client.generatePersonalAccessToken(name: "ci")
+try await client.removePersonalAccessToken(name: "ci")
 
 // Live room list + messages:
 await client.startSync()
@@ -84,7 +96,7 @@ in the Keychain; the SDK never writes them anywhere.
 `make run-app` builds and launches **RocketNative.app** (release, ad-hoc
 signed, assembled without Xcode — ~3 MB bundle, ~95 MB RSS at launch).
 
-Features: login with 2FA (TOTP + email code sheet), Keychain session resume,
+Features: login with 2FA (TOTP + email code sheet, mid-session prompts), Keychain session resume,
 live sidebar with unread/mention badges, message timeline with markdown
 rendering (`md` AST), reactions, avatars, image/file attachments, optimistic
 sending with failed-state retry markers, file upload (attach button +

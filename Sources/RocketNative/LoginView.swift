@@ -79,14 +79,25 @@ struct LoginView: View {
             server = isSheet ? "" : session.serverURLString
             focus = isSheet ? .server : .username
         }
-        .sheet(isPresented: .constant(isTwoFactor)) {
-            TwoFactorSheet()
+        .sheet(isPresented: .constant(twoFactorChallenge != nil)) {
+            if let challenge = twoFactorChallenge {
+                TwoFactorSheet(
+                    challenge: challenge,
+                    errorText: session.loginError,
+                    notice: session.twoFactorNotice,
+                    isVerifying: session.isVerifyingTwoFactor,
+                    onSubmit: { code in
+                        Task { await session.submitTwoFactor(code: code) }
+                    },
+                    onCancel: { session.cancelTwoFactor() },
+                    onResend: { Task { await session.resendEmailCode() } })
+            }
         }
     }
 
-    private var isTwoFactor: Bool {
-        if case .twoFactor = session.loginFlow { return true }
-        return false
+    private var twoFactorChallenge: TwoFactorChallenge? {
+        if case .twoFactor(let challenge) = session.loginFlow { return challenge }
+        return nil
     }
 
     private func submit() {
@@ -95,86 +106,140 @@ struct LoginView: View {
     }
 }
 
-/// Code-entry sheet for TOTP or emailed 2FA codes.
+/// Code-entry sheet for a 2FA challenge, shared by login and mid-session
+/// prompts. Pure: the caller owns the flow and passes state and actions in.
+/// No method picker — the server verifies with `challenge.method`.
 struct TwoFactorSheet: View {
-    @Environment(AppSession.self) private var session
+    let challenge: TwoFactorChallenge
+    /// Extra context under the title (e.g. the workspace, with several).
+    var subtitle: String?
+    /// Error from the last attempt; a retry challenge shows its own.
+    var errorText: String?
+    /// Informational line, e.g. after a resend.
+    var notice: String?
+    var isVerifying = false
+    let onSubmit: (String) -> Void
+    let onCancel: () -> Void
+    var onResend: (() -> Void)?
 
     @State private var code = ""
-    @State private var method: TwoFactorMethod = .totp
     @FocusState private var codeFocused: Bool
 
-    private var challenge: TwoFactorChallenge? {
-        if case .twoFactor(let challenge) = session.loginFlow { return challenge }
-        return nil
+    private var method: TwoFactorMethod { challenge.method }
+
+    private var title: String {
+        method == .password ? "Please enter your password" : "Two-Factor Authentication"
+    }
+
+    private var instructions: String {
+        switch method {
+        case .totp: "Open your authentication app and enter the code."
+        case .email: "Enter the code we just emailed you."
+        case .password: "For your security, you must enter your account password to continue."
+        }
+    }
+
+    private var icon: String {
+        switch method {
+        case .totp: "lock.shield"
+        case .email: "envelope.badge.shield.half.filled"
+        case .password: "key"
+        }
+    }
+
+    private var displayedError: String? {
+        if let errorText { return errorText }
+        guard challenge.isRetry else { return nil }
+        return method == .password ? "Incorrect password." : "Invalid code."
     }
 
     var body: some View {
         VStack(spacing: 18) {
-            Image(systemName: method == .email ? "envelope.badge.shield.half.filled" : "lock.shield")
+            Image(systemName: icon)
                 .font(.system(size: 34))
                 .foregroundStyle(.tint)
-            Text("Two-Factor Authentication")
-                .font(.headline)
-            Text(method == .email
-                ? "Enter the code we sent to your email address."
-                : "Enter the code from your authenticator app.")
+            VStack(spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text(instructions)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            TextField("000000", text: $code)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(.title2, design: .monospaced))
-                .multilineTextAlignment(.center)
-                .frame(width: 140)
-                .focused($codeFocused)
-                .onSubmit { submit() }
+            Group {
+                if method == .password {
+                    SecureField("Password", text: $code)
+                        .textContentType(.password)
+                        .frame(width: 220)
+                } else {
+                    // Not digit-only: TOTP also accepts backup codes.
+                    TextField("000000", text: $code)
+                        .font(.system(.title2, design: .monospaced))
+                        .multilineTextAlignment(.center)
+                        .frame(width: 140)
+                }
+            }
+            .textFieldStyle(.roundedBorder)
+            .focused($codeFocused)
+            .disabled(isVerifying)
+            .onSubmit { submit() }
 
-            if let error = session.loginError {
-                Text(error)
+            if let displayedError {
+                Text(displayedError)
                     .font(.callout)
                     .foregroundStyle(Color.rcDanger)
+            } else if let notice {
+                Text(notice)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
 
-            if let methods = challenge?.availableMethods, methods.count > 1 {
-                Picker("Method", selection: $method) {
-                    ForEach(methods, id: \.self) { method in
-                        Text(method == .totp ? "Authenticator app" : "Email code")
-                            .tag(method)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 280)
-            }
-
-            if method == .email {
-                Button("Resend code") {
-                    Task { await session.resendEmailCode() }
-                }
-                .buttonStyle(.link)
+            if method == .email, let onResend {
+                Button("Resend email", action: onResend)
+                    .buttonStyle(.link)
+                    .disabled(isVerifying)
             }
 
             HStack {
-                Button("Cancel") { session.cancelTwoFactor() }
+                Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
-                Button("Verify") { submit() }
-                    .buttonStyle(.glassProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(code.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button(action: submit) {
+                    if isVerifying {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Verify")
+                    }
+                }
+                .buttonStyle(.glassProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(isVerifying || trimmedCode.isEmpty)
             }
         }
         .padding(28)
         .frame(width: 360)
-        .onAppear {
-            method = challenge?.defaultMethod ?? challenge?.availableMethods.first ?? .totp
+        .onAppear { codeFocused = true }
+        .onChange(of: isVerifying) { _, verifying in
+            // A rejected code comes back with an error: clear it for a fresh try.
+            guard !verifying, displayedError != nil else { return }
+            code = ""
             codeFocused = true
         }
     }
 
+    private var trimmedCode: String {
+        code.trimmingCharacters(in: .whitespaces)
+    }
+
     private func submit() {
-        let code = code.trimmingCharacters(in: .whitespaces)
-        guard !code.isEmpty else { return }
-        let method = method
-        Task { await session.submitTwoFactor(code: code, method: method) }
+        // Passwords go as typed; only codes are trimmed.
+        let value = method == .password ? code : trimmedCode
+        guard !trimmedCode.isEmpty, !isVerifying else { return }
+        onSubmit(value)
     }
 }

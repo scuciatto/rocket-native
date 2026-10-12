@@ -38,4 +38,9 @@ Keep the two in sync when adding backlog items (`gh project item-create 2
   both ISO-8601 and `{"$date": ms}`.
 - Never send `query`/`fields` REST params (disabled in Rocket.Chat 7.x).
 - 2FA (`totp-required` → replay with `x-2fa-code`/`x-2fa-method`) is handled by
-  a generic REST interceptor, not per-endpoint code.
+  a generic REST interceptor, not per-endpoint code. Login reports it as HTTP
+  401 with the code in `error` (other routes: 400 + `errorType`); any other
+  login 401 stays `.notAuthenticated`. Mid-session challenges on
+  authenticated calls go to the installed `TwoFactorCodeProvider` (nil →
+  `.cancelled`, a silent no-op for callers); login never uses it. The
+  `password` method sends the lowercase SHA-256 hex of the password.

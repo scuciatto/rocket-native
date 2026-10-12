@@ -9,12 +9,16 @@ public enum RocketChatError: Error, Sendable {
     case notAuthenticated
     case decoding(description: String, endpoint: String)
     case invalidServerURL
+    /// The call was abandoned before completing — including a 2FA prompt the
+    /// user dismissed (`TwoFactorCodeProvider` returned nil). Callers should
+    /// treat it as a silent no-op, not an error to display.
     case cancelled
 }
 
 /// Body shape of Rocket.Chat API errors. Two envelopes exist in the wild:
 /// `{"success": false, "error": "...", "errorType": "..."}` (most endpoints)
-/// and `{"status": "error", "error": ..., "message": "..."}` (login).
+/// and `{"status": "error", "error": ..., "message": "..."}` (login, where a
+/// 2FA challenge arrives as HTTP 401 with the code in `error`).
 struct APIErrorBody: Decodable {
     var error: String?
     var errorType: String?
@@ -25,7 +29,7 @@ struct APIErrorBody: Decodable {
         var method: String?
         var availableMethods: [String]?
         var codeGenerated: Bool?
-        var codeCount: Int?
+        var emailOrUsername: String?
     }
 
     // `error` is sometimes a string, sometimes a number (login envelope).
