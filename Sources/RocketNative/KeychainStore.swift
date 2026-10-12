@@ -8,15 +8,21 @@ import RocketChatSDK
 enum KeychainStore {
     private static let service = "chat.rocket.native-experiment"
 
+    /// Writes only when the stored value differs, and updates in place rather
+    /// than delete+add: every Keychain access can prompt, and re-adding an
+    /// item resets its access list.
     static func save(_ credentials: AuthCredentials, server: URL) {
         guard let account = server.host(),
               let data = try? JSONEncoder().encode(credentials) else { return }
+        if load(server: server) == credentials { return }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemUpdate(
+            query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        guard status == errSecItemNotFound else { return }
         var attributes = query
         attributes[kSecValueData as String] = data
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock

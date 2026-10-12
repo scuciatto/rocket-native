@@ -24,7 +24,10 @@ Keep the two in sync when adding backlog items (`gh project item-create 2
   .xctest in this folder.
 - CLI smoke tool: `swift run rc-cli <command>`
 - App: `make app` assembles .build/RocketNative.app without Xcode (SPM release
-  build + App/Info.plist + ad-hoc codesign); `make run-app` also launches it.
+  build + App/Info.plist + codesign); `make run-app` also launches it.
+  `make signing-cert` (once per machine) creates the stable self-signed
+  identity `app` signs with; without it the build is ad-hoc and every rebuild
+  re-triggers Keychain password prompts.
 - Local server: `cd IntegrationTests && docker compose up -d` → admin /
   rc-admin-pass at http://localhost:3000.
 
