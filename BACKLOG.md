@@ -96,6 +96,15 @@ Roughly ordered by expected value.
 22. **PAT login and management UI** — extends #11: list/create/remove
     personal access tokens in the app (SDK has create/remove; `rc-cli pat`
     exercises them) and offer PAT sign-in on the login form.
+23. **Custom emoji picker and autocomplete** — custom emoji render in
+    messages and reactions, but can't be chosen: add them to the reaction
+    menu/picker and a `:` autocomplete in the composer (insert `:name:`;
+    React with the bare name via `chat.react`).
+24. **Animated custom emoji** — `Text(Image)` shows only a GIF's first
+    frame; animating needs an `NSTextView`-based message renderer.
+25. **Persist custom emoji** — the list is re-fetched in full on each launch
+    (one request); store it in the SQLite cache and resume from the
+    watermark if large workspaces make that slow.
 
 ## Known v1 limitations (accepted, documented in README)
 

@@ -49,3 +49,11 @@ Keep the two in sync when adding backlog items (`gh project item-create 2
   authenticated calls go to the installed `TwoFactorCodeProvider` (nil →
   `.cancelled`, a silent no-op for callers); login never uses it. The
   `password` method sends the lowercase SHA-256 hex of the password.
+- Custom emoji come from `emoji-custom.list` delta sync (`CustomEmojiIndex`);
+  look up by name **and** aliases (reaction keys may be aliases). The image
+  route `/emoji-custom/<name>.<ext>?etag=` is unauthenticated, always uses the
+  canonical name, and serves GIFs labelled as JPEG (decode by bytes).
+- Standard emoji shortcodes resolve via `EmojiMap`, backed by the generated
+  `EmojiShortnames.swift` (React Native's emojibase table; regenerate with
+  `scripts/generate-emoji-shortnames.py`, never edit by hand). A custom emoji
+  with the same name wins over the built-in.

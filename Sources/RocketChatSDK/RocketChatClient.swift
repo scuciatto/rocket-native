@@ -396,6 +396,29 @@ public final class RocketChatClient: Sendable {
         _ = try await rest.send(API.Users.removePersonalAccessToken(name: name))
     }
 
+    // MARK: - Custom emoji
+
+    /// Custom emoji changed since `updatedSince` (all of them when nil), plus
+    /// ids deleted since then. Feed into `CustomEmojiIndex.apply`.
+    public func customEmojis(updatedSince: Date? = nil) async throws -> CustomEmojiDelta {
+        let response = try await rest.send(API.EmojiCustom.list(updatedSince: updatedSince))
+        return CustomEmojiDelta(
+            update: response.emojis.update,
+            remove: response.emojis.remove?.map(\._id) ?? [])
+    }
+
+    /// Image URL for a custom emoji. The route is unauthenticated; the etag
+    /// busts caches when an emoji is re-uploaded under the same name.
+    public func customEmojiURL(_ emoji: CustomEmoji) -> URL {
+        var components = URLComponents(
+            url: serverURL.appending(path: "emoji-custom/\(emoji.name).\(emoji.extension)"),
+            resolvingAgainstBaseURL: false)!
+        if let etag = emoji.etag {
+            components.queryItems = [URLQueryItem(name: "etag", value: etag)]
+        }
+        return components.url!
+    }
+
     /// Avatar URL for a username. Append the user's `avatarETag` when known so
     /// avatar changes bust image caches naturally.
     public func avatarURL(username: String, size: Int? = nil, etag: String? = nil) -> URL {

@@ -529,7 +529,7 @@ struct MessageRow: View {
                 RenderedBlocksView(blocks: blocks)
                     .opacity(entry.delivery == .sending ? 0.5 : 1)
             } else if !message.msg.isEmpty {
-                Text(message.msg)
+                Text(EmojiMap.replacingShortcodes(in: message.msg))
                     .font(.rcBody)
                     .foregroundStyle(Color.rcFontDefault)
                     .textSelection(.enabled)
@@ -565,7 +565,7 @@ struct MessageRow: View {
                         actions?.react?(message, emoji)
                     } label: {
                         HStack(spacing: 3) {
-                            Text(EmojiMap.unicode(forShortCode: emoji) ?? emoji)
+                            reactionLabel(emoji)
                             Text("\(reaction.usernames.count)")
                                 .font(.caption2.weight(.medium))
                                 .foregroundStyle(mine ? Color.rcPrimary : Color.rcFontSecondaryInfo)
@@ -589,6 +589,20 @@ struct MessageRow: View {
                 }
             }
             .padding(.top, 2)
+        }
+    }
+
+    /// The server image for custom emoji (they win over built-ins of the same
+    /// name), else unicode, else the raw key while loading or unmatched.
+    @ViewBuilder
+    private func reactionLabel(_ emoji: String) -> some View {
+        if let image = session.activeAccount?.emojis
+            .image(forShortCode: emoji, height: 16) {
+            Image(nsImage: image)
+        } else if let unicode = EmojiMap.unicode(forShortCode: emoji) {
+            Text(unicode)
+        } else {
+            Text(emoji)
         }
     }
 }
@@ -746,9 +760,13 @@ struct RenderedBlocksView: View {
     private func blockView(_ block: MarkdownRenderer.Block) -> some View {
         switch block {
         case .paragraph(let text):
-            Text(text).textSelection(.enabled)
+            EmojiText(text: text).textSelection(.enabled)
+        case .bigEmoji(let text):
+            EmojiText(text: text, emojiHeight: 36)
+                .font(.system(size: 32))
+                .textSelection(.enabled)
         case .heading(let level, let text):
-            Text(text)
+            EmojiText(text: text)
                 .font(level <= 1 ? .title2.bold() : level == 2 ? .title3.bold() : .headline)
                 .textSelection(.enabled)
         case .code(_, let code):
@@ -767,7 +785,7 @@ struct RenderedBlocksView: View {
                     .frame(width: 3)
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, text in
-                        Text(text).textSelection(.enabled)
+                        EmojiText(text: text).textSelection(.enabled)
                     }
                 }
                 .foregroundStyle(Color.rcFontSecondaryInfo)
@@ -778,11 +796,43 @@ struct RenderedBlocksView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(ordered ? "\(index + 1)." : "•")
                             .foregroundStyle(.secondary)
-                        Text(item).textSelection(.enabled)
+                        EmojiText(text: item).textSelection(.enabled)
                     }
                 }
             }
         }
+    }
+}
+
+/// Inline-markdown text whose custom-emoji runs (tagged by
+/// `MarkdownRenderer`) render as the server's images once loaded; until then,
+/// or when the server has no such emoji, they stay `:name:` text.
+struct EmojiText: View {
+    @Environment(AppSession.self) private var session
+    let text: AttributedString
+    var emojiHeight: CGFloat = 18
+
+    var body: some View {
+        let store = session.activeAccount?.emojis
+        var result = Text(verbatim: "")
+        for run in text.runs {
+            let segment = text[run.range]
+            var piece = Text(AttributedString(segment))
+            if let code = run[CustomEmojiAttribute.self],
+               let image = store?.image(forShortCode: code, height: emojiHeight) {
+                // Identical adjacent runs merge, so `:a::a:` is one run: count
+                // shortcodes by colon pairs, or unicode glyphs by character.
+                let characters = segment.characters
+                let count = characters.first == ":"
+                    ? max(1, characters.filter { $0 == ":" }.count / 2)
+                    : max(1, characters.count)
+                let glyph = Text(Image(nsImage: image)).baselineOffset(-emojiHeight / 4.5)
+                piece = Text(verbatim: "")
+                for _ in 0..<count { piece = Text("\(piece)\(glyph)") }
+            }
+            result = Text("\(result)\(piece)")
+        }
+        return result
     }
 }
 
