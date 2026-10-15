@@ -16,6 +16,16 @@ public protocol MessageStoring: Sendable {
     func trim(_ roomId: String, to limit: Int) async
 }
 
+/// Newer-wins: a record whose `_updatedAt` is older than the stored copy's
+/// must not replace it. Stream payloads and REST responses race (an
+/// in-flight delta can be older than an event just applied); a later tick
+/// converges either way, but the UI never steps backwards. Records without
+/// a timestamp (optimistic sends) always apply.
+func isStale(_ incoming: Date?, comparedTo stored: Date?) -> Bool {
+    guard let incoming, let stored else { return false }
+    return incoming < stored
+}
+
 actor InMemoryMessageStore: MessageStoring {
     /// Cap applied when live deltas grow the window (scroll-back via
     /// `prepend` may exceed it up to `hardLimit`).
@@ -47,7 +57,8 @@ actor InMemoryMessageStore: MessageStoring {
 
     func apply(delta: MessageDelta, in roomId: String) {
         var timeline = timelines[roomId] ?? RoomTimeline()
-        for message in delta.updated {
+        for message in delta.updated
+        where !isStale(message._updatedAt, comparedTo: timeline.byId[message._id]?._updatedAt) {
             timeline.byId[message._id] = message
             // A server record for a pending id is the echo of an optimistic send.
             timeline.pending.remove(message._id)
@@ -63,7 +74,8 @@ actor InMemoryMessageStore: MessageStoring {
 
     func prepend(older: [Message], in roomId: String) {
         var timeline = timelines[roomId] ?? RoomTimeline()
-        for message in older {
+        for message in older
+        where !isStale(message._updatedAt, comparedTo: timeline.byId[message._id]?._updatedAt) {
             timeline.byId[message._id] = message
         }
         enforceWindow(&timeline, limit: hardLimit)

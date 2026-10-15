@@ -58,6 +58,12 @@ extension Color {
     // Status
     static let rcStatusWarning = rcDynamic(light: 0xB68D00, dark: 0xFFD031)
 
+    // User presence (Fuselage status bullets)
+    static let rcPresenceOnline = rcFixed(0x2DE0A5)
+    static let rcPresenceAway = rcFixed(0xFFD031)
+    static let rcPresenceBusy = rcFixed(0xF5455C)
+    static let rcPresenceOffline = rcDynamic(light: 0xCBCED1, dark: 0x6C727A)
+
     // Badges (Fuselage unread variants: mention / thread / group / plain)
     static let rcBadgeMention = rcDynamic(light: 0xF5455C, dark: 0xB43C4C)
     static let rcBadgeThread = rcDynamic(light: 0x1D74F5, dark: 0x2C65BA)

@@ -14,11 +14,13 @@ Roughly ordered by expected value.
    for DMs and mentions, suppressed for the on-screen room) and the Dock
    badge (personal count, dot for channel chatter); clicking a banner opens
    the room.
-3. ~~**Push transport**~~ — **done** (feature/push-signal): `PushSignaling`
-   seam in the engine + opt-in `StreamerSignalTransport` bell (streamer used
-   for wake-up hints only, zero payloads; REST stays the data path; polling
-   stretches to a safety net while healthy). 0.17 s live delivery vs the
-   2.5 s poll bound. Typing indicators remain out (would require payloads).
+3. ~~**Push transport**~~ — **done** (feature/push-signal, then
+   feature/realtime-streamer): `RealtimeTransport` seam in the engine +
+   `StreamerTransport` carrying payloads, mirroring the React Native app —
+   open-room messages/deletes/typing, sidebar subscription/room records, DM
+   presence. REST stays the source of truth (marks only advance from REST;
+   newer-wins upserts); polling stretches to a safety net while healthy.
+   Follow-ups below (#26–#29).
 4. ~~**Multi-server/workspace UI**~~ — **done** (feature/multi-server):
    vertical server rail (lateral tabs; horizontal space reserved for future
    conversation tabs), all accounts live concurrently, aggregated
@@ -106,9 +108,18 @@ Roughly ordered by expected value.
     (one request); store it in the SQLite cache and resume from the
     watermark if large workspaces make that slow.
 
+26. **Bulk deletes over the stream** — `<rid>/deleteMessageBulk` (retention
+    pruning, "clean history") isn't subscribed; those deletions arrive with
+    the next REST tick instead of instantly.
+27. **Read receipts** — `<rid>/messagesRead` (Enterprise) isn't subscribed;
+    needs per-message read state and a checkmark UI.
+28. **Presence beyond DMs** — only DM partners are tracked; add status dots
+    on message avatars and the room header (batch ids like RN, every 2 s).
+29. **Own status** — set online/away/busy + status text via REST
+    `users.setStatus` (never the `UserPresence:*` DDP methods).
+
 ## Known v1 limitations (accepted, documented in README)
 
-- Update latency: ~2–3 s active room, ~15–30 s sidebar (polling).
-- No typing indicators yet (streamer-only feature; the streamer is now
-  permitted, see CLAUDE.md API policy).
+- Update latency: sub-second with the streamer; ~2–3 s active room, ~15–30 s
+  sidebar when it falls back to polling.
 - No offline mode until item 1 lands.

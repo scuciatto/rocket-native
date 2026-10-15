@@ -1,7 +1,7 @@
 import Foundation
 
-/// A live view into one room: the message window plus the fast poll loop
-/// that keeps it fresh. Obtain via `RocketChatClient.openRoom(_:)`; call
+/// A live view into one room: the message window plus the stream
+/// subscription and poll loop that keep it fresh. Obtain via `RocketChatClient.openRoom(_:)`; call
 /// `close()` when the room leaves the screen so polling stops and the
 /// window shrinks.
 public final class RoomHandle: Sendable {
@@ -42,6 +42,22 @@ public final class RoomHandle: Sendable {
     /// `.sending` immediately and reconciles with the server echo.
     public func send(text: String, threadId: String? = nil) async throws {
         try await engine.send(text: text, roomId: roomId, threadId: threadId)
+    }
+
+    /// Names currently typing in the room's main timeline (thread typists
+    /// show on their `ThreadHandle`). Yields now, then on change.
+    public func typingUpdates() async -> AsyncStream<[String]> {
+        await engine.typing.updates(roomId: roomId, threadId: nil)
+    }
+
+    /// Call on composer input; throttled, auto-stops after a few idle seconds.
+    public func noteTyping() async {
+        await engine.noteTyping(roomId: roomId, threadId: nil)
+    }
+
+    /// Call when the draft is cleared. Sending stops typing automatically.
+    public func stopTyping() async {
+        await engine.stopTyping(roomId: roomId, threadId: nil)
     }
 
     public func markRead() async throws {

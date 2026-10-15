@@ -161,6 +161,9 @@ actor SQLiteMessageStore: MessageStoring {
         try? database.run("UPDATE messages SET pending = 0, failed = 1 WHERE pending = 1")
     }
 
+    /// Newer-wins (see `isStale`), evaluated in SQL: `_updatedAt` is stored
+    /// as fixed-width ISO-8601 UTC (`RCJSON.encoder`), so string order is
+    /// time order.
     private func upsert(_ message: Message, in window: String, pending: Bool = false) {
         guard let data = try? encoder.encode(message),
               let json = String(data: data, encoding: .utf8) else { return }
@@ -170,6 +173,10 @@ actor SQLiteMessageStore: MessageStoring {
             ON CONFLICT(window, id) DO UPDATE SET
                 ts = excluded.ts, json = excluded.json,
                 pending = excluded.pending, failed = 0
+            WHERE json_extract(excluded.json, '$._updatedAt') IS NULL
+               OR json_extract(messages.json, '$._updatedAt') IS NULL
+               OR json_extract(excluded.json, '$._updatedAt')
+                  >= json_extract(messages.json, '$._updatedAt')
             """, [
                 .text(window), .text(message._id),
                 .real(message.ts.timeIntervalSince1970),

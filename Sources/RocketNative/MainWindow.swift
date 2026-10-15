@@ -65,7 +65,9 @@ struct WorkspaceView: View {
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(rooms: model.rooms, selection: $account.selectedRoomId)
+            SidebarView(
+                rooms: model.rooms, presence: model.presence,
+                selection: $account.selectedRoomId)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240)
         } detail: {
             if let roomId = account.selectedRoomId,
@@ -126,6 +128,8 @@ struct WorkspaceView: View {
 final class RoomListModel {
     private(set) var rooms: [RoomSummary] = []
     private(set) var syncState: SyncState = .idle
+    /// DM partners' presence, keyed by user id.
+    private(set) var presence: [String: UserPresence] = [:]
 
     func observe(_ client: RocketChatClient) async {
         async let stateTask: Void = {
@@ -133,16 +137,28 @@ final class RoomListModel {
                 await MainActor.run { self.syncState = state }
             }
         }()
+        async let presenceTask: Void = {
+            for await map in await client.presenceUpdates() {
+                await MainActor.run { self.presence = map }
+            }
+        }()
         for await list in await client.roomListUpdates() {
             self.rooms = list.filter(\.open)
+            // Tracking is additive in the SDK; new DMs just add their peer.
+            let peers = rooms.compactMap(\.directPeerId)
+            if !peers.isEmpty {
+                await client.trackPresence(userIds: peers)
+            }
         }
         await stateTask
+        await presenceTask
     }
 }
 
 struct SidebarView: View {
     @Environment(AppSession.self) private var session
     let rooms: [RoomSummary]
+    let presence: [String: UserPresence]
     @Binding var selection: String?
 
     private var channels: [RoomSummary] {
@@ -174,7 +190,7 @@ struct SidebarView: View {
     }
 
     private func row(_ room: RoomSummary) -> some View {
-        RoomRow(room: room)
+        RoomRow(room: room, presence: room.directPeerId.flatMap { presence[$0] })
             .tag(room.id)
             .contextMenu {
                 if room.unread > 0 || room.alert {
@@ -192,6 +208,8 @@ struct SidebarView: View {
 
 struct RoomRow: View {
     let room: RoomSummary
+    /// The DM partner's status; nil for channels or when unknown.
+    var presence: UserPresence?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -200,6 +218,13 @@ struct RoomRow: View {
                 : room.type == .privateGroup ? "lock" : "number")
                 .foregroundStyle(.secondary)
                 .frame(width: 16)
+                .overlay(alignment: .bottomTrailing) {
+                    if let presence {
+                        PresenceDot(status: presence.status)
+                            .offset(x: 2, y: 2)
+                    }
+                }
+                .help(presence.map(PresenceDot.helpText) ?? "")
             Text(room.displayName)
                 .font(.rcBody)
                 .fontWeight(room.unread > 0 || room.alert ? .semibold : .regular)
@@ -227,6 +252,43 @@ struct RoomRow: View {
             .background(color)
             .foregroundStyle(.white)
             .clipShape(Capsule())
+    }
+}
+
+/// Fuselage-style status bullet, ringed so it reads on any row background.
+struct PresenceDot: View {
+    let status: PresenceStatus
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 7, height: 7)
+            .overlay(Circle().stroke(Color.rcSurfaceLight, lineWidth: 1.5))
+            .accessibilityLabel(Self.label(status))
+    }
+
+    private var color: Color {
+        switch status {
+        case .online: .rcPresenceOnline
+        case .away: .rcPresenceAway
+        case .busy: .rcPresenceBusy
+        case .offline, .unknown: .rcPresenceOffline
+        }
+    }
+
+    static func label(_ status: PresenceStatus) -> String {
+        switch status {
+        case .online: "Online"
+        case .away: "Away"
+        case .busy: "Busy"
+        case .offline: "Offline"
+        case .unknown: "Status unknown"
+        }
+    }
+
+    static func helpText(_ presence: UserPresence) -> String {
+        let text = presence.statusText?.trimmingCharacters(in: .whitespaces) ?? ""
+        return text.isEmpty ? label(presence.status) : "\(label(presence.status)) — \(text)"
     }
 }
 

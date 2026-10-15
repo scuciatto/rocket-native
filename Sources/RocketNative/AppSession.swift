@@ -289,7 +289,7 @@ final class AppSession {
             accountId: account.id, accountName: account.displayName,
             presenter: twoFactor))
         await account.client.startSync()
-        await account.client.enablePushSignals()
+        await account.client.enableRealtime()
         Task { await account.emojis.refresh() }
         notifications.register(
             accountId: account.id, client: account.client,

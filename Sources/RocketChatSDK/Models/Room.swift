@@ -126,6 +126,8 @@ public struct RoomSummary: Sendable, Identifiable, Equatable {
     /// When the user last saw the room (`ls`) — anchors the "new messages"
     /// separator.
     public var lastSeen: Date? = nil
+    /// For a one-to-one DM: the other participant's user id (presence key).
+    public var directPeerId: String? = nil
 
     public init(room: Room?, subscription: Subscription) {
         self.id = subscription.rid
@@ -144,5 +146,8 @@ public struct RoomSummary: Sendable, Identifiable, Equatable {
         self.lastMessage = room?.lastMessage
         self.lastActivity = room?.lm ?? room?.lastMessage?.ts ?? room?._updatedAt
         self.lastSeen = subscription.ls
+        if self.type == .directMessage, let uids = room?.uids, uids.count == 2 {
+            self.directPeerId = uids.first { $0 != subscription.u?._id }
+        }
     }
 }

@@ -11,9 +11,9 @@ two deliverables:
 **REST for requests, streamer for realtime.** Every request and action uses
 the REST API (`/api/v1`). Rocket.Chat is migrating DDP *methods* to REST and
 removes them in 9.0, so the SDK never calls them. The realtime DDP *streamer*
-(WebSocket subscriptions) is not deprecated. The SDK may use it to speed up
-live updates, but the source of truth is *delta-sync polling* against
-first-class REST endpoints:
+(WebSocket subscriptions) is not deprecated, and the SDK uses it for instant
+messages, typing and presence. The source of truth is still *delta-sync
+polling* against first-class REST endpoints:
 
 | Tier | Endpoints | Cadence |
 | --- | --- | --- |
@@ -26,18 +26,29 @@ sleep or network loss is also the recovery path — there is no separate
 reconnect logic. The poller honors `x-ratelimit-*` headers and backs off on
 429s.
 
-**Known v1 limitations:** there are no typing indicators yet. These, live
-presence and live read receipts exist only on the streamer and are planned on
-top of it.
+**Realtime.** `client.enableRealtime()` connects the streamer WebSocket (the
+app enables it for every account), mirroring what the React Native app
+subscribes to:
 
-**Push signals.** `client.enablePushSignals()` attaches a *bell*, and the app
-enables it for every account. It is the realtime WebSocket subscribed to the
-two user-level notify streams, and today it reduces every event to a
-"something changed" hint. Message data still flows through REST delta sync.
-Signals trigger immediate ticks (sub-second updates). Polling continues at the
-idle cadence as a safety net, so a failed socket degrades silently to plain
-polling. Carrying stream payloads (messages, typing, presence) is allowed; any
-of that must still converge with the next REST tick.
+| Stream | Scope | Applied as |
+| --- | --- | --- |
+| `stream-room-messages` `<rid>` | each open room (threads ride on their room) | message upsert into the room/thread window |
+| `stream-notify-room` `<rid>/deleteMessage` | each open room | message removal |
+| `stream-notify-room` `<rid>/user-activity` | each open room | typing indicator (10 s expiry if a stop is lost) |
+| `stream-notify-user` `subscriptions-changed`, `rooms-changed` | account | sidebar record upserts (unread badges, previews) |
+| `stream-user-presence` | tracked users (DM partners) | status dots, seeded by REST `users.presence` |
+
+Our own typing is the one stream *write* (`stream-notify-room`
+`<rid>/user-activity`, throttled to one per 3 s, stop after 5 s idle); the
+socket also authenticates with the streamer's `login {resume}`. Nothing else
+on the socket is a request — everything else is REST.
+
+Stream payloads never advance a high-water mark, and store upserts are
+newer-wins on `_updatedAt`, so REST ticks converge whatever the socket drops
+or races. While the socket is healthy, polling stretches to the idle cadence
+as a safety net and live rooms skip per-message ticks; after a reconnect the
+engine runs a catch-up tick and re-seeds presence. If the socket is down,
+everything degrades silently to plain polling.
 
 **Offline cache.** Stores are backed by SQLite (system `libsqlite3`, still
 zero third-party dependencies) when the client is created with
@@ -84,6 +95,13 @@ for await snapshot in await room.timelineUpdates() { /* render timeline */ }
 try await room.send(text: "hello")   // optimistic: appears instantly as .sending
 await room.close()                   // stops polling, shrinks the window
 
+// Realtime (instant messages, typing, presence):
+await client.enableRealtime()
+for await names in await room.typingUpdates() { /* "ana is typing…" */ }
+await room.noteTyping()              // on composer input; throttled + auto-stop
+await client.trackPresence(userIds: [peerId])
+for await presence in await client.presenceUpdates() { /* status dots */ }
+
 // Threads, search, directory:
 let threads = try await client.threads(in: roomId)
 let thread = try await client.openThread(threadId, in: roomId)
@@ -108,16 +126,18 @@ rendering (`md` AST), standard (~7,900 shortcodes) and custom emoji (messages, b
 sending with failed-state retry markers, file upload (attach button +
 drag-and-drop, via rooms.media), thread inspector (reply counts, context
 menu), ⌘F in-room search, ⌘K global switcher (join channels, start DMs),
-sync-status badge, and slower polling while backgrounded.
+sync-status badge, realtime streamer (instant messages, typing indicators in
+rooms and threads, DM presence dots), and slower polling while backgrounded.
 
 ## Development
 
 - Build: `make build` · Test: `make test` (not plain `swift test` — see Makefile)
 - App bundle: `make app` (or `make run-app` to also launch it)
-- Smoke tool: `swift run rc-cli` (login/rooms/history/send/tail/threads/search/spotlight/directory)
+- Smoke tool: `swift run rc-cli` (login/rooms/history/send/tail/threads/search/spotlight/directory);
+  `tail` follows a room over the streamer and prints typing (`RC_POLL=1` for polling only)
 - Integration server: `cd IntegrationTests && docker compose up -d`, then
   `swift run rc-cli login http://localhost:3000 admin` (password `rc-admin-pass`)
 
 Supported servers: Rocket.Chat 7.x and 8.x — validated live against 7.0 and
-8.6.0 (full endpoint sweep, delta-sync tail, and push bell). The 8.0
+8.6.0 (full endpoint sweep, delta-sync tail, and realtime streamer). The 8.0
 breaking-change wave removed no endpoint this SDK uses.

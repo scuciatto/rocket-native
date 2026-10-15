@@ -24,6 +24,21 @@ public final class ThreadHandle: Sendable {
         await engine.messageStore.snapshot(SyncEngine.threadKey(threadId))
     }
 
+    /// Names currently typing in this thread. Yields now, then on change.
+    public func typingUpdates() async -> AsyncStream<[String]> {
+        await engine.typing.updates(roomId: roomId, threadId: threadId)
+    }
+
+    /// Call on composer input; throttled, auto-stops after a few idle seconds.
+    public func noteTyping() async {
+        await engine.noteTyping(roomId: roomId, threadId: threadId)
+    }
+
+    /// Call when the draft is cleared. Sending stops typing automatically.
+    public func stopTyping() async {
+        await engine.stopTyping(roomId: roomId, threadId: threadId)
+    }
+
     /// Sends a reply into the thread (optimistic, like `RoomHandle.send`).
     public func send(text: String) async throws {
         try await engine.send(text: text, roomId: roomId, threadId: threadId)

@@ -47,6 +47,9 @@ struct RoomView: View {
                         draft = message.msg
                     },
                     delete: { deleteCandidate = $0 }))
+                .overlay(alignment: .bottomLeading) {
+                    TypingIndicator(names: model.typists)
+                }
             Divider()
             if !model.uploadingNames.isEmpty {
                 UploadingBanner(names: model.uploadingNames)
@@ -144,6 +147,11 @@ struct RoomView: View {
             guard let client = session.client else { return }
             await model.open(room: room, client: client)
         }
+        .onChange(of: draft) { _, text in
+            // Edits aren't new messages: no typing broadcast for them.
+            guard editingMessage == nil else { return }
+            model.draftChanged(text)
+        }
         .onDisappear {
             model.close()
         }
@@ -170,8 +178,12 @@ final class TimelineModel {
     private(set) var unreadAnchor: Date?
     var sendError: String?
 
+    /// Who's typing in this room's main timeline.
+    private(set) var typists: [String] = []
+
     private var handle: RoomHandle?
     private var observation: Task<Void, Never>?
+    private var typingObservation: Task<Void, Never>?
 
     func open(room: RoomSummary, client: RocketChatClient) async {
         // Capture the divider anchor before marking the room read.
@@ -180,6 +192,11 @@ final class TimelineModel {
             let handle = try await client.openRoom(room.id)
             self.handle = handle
             try? await handle.markRead()
+            typingObservation = Task {
+                for await names in await handle.typingUpdates() {
+                    self.typists = names
+                }
+            }
             var lastSeenEntryId: String?
             observation = Task {
                 for await snapshot in await handle.timelineUpdates() {
@@ -303,8 +320,23 @@ final class TimelineModel {
             data: data, filename: url.lastPathComponent, mimeType: mimeType)
     }
 
+    /// Composer input: throttled "typing" while there's text, "stopped"
+    /// as soon as the draft empties (sending also stops it in the SDK).
+    func draftChanged(_ text: String) {
+        guard let handle else { return }
+        let hasText = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        Task {
+            if hasText {
+                await handle.noteTyping()
+            } else {
+                await handle.stopTyping()
+            }
+        }
+    }
+
     func close() {
         observation?.cancel()
+        typingObservation?.cancel()
         let handle = handle
         Task { await handle?.close() }
         self.handle = nil
@@ -693,6 +725,36 @@ struct UnreadDivider: View {
         }
         .padding(.horizontal, RCSpace.x5)
         .padding(.vertical, 6)
+    }
+}
+
+/// "alice is typing…" floating over the timeline's bottom edge, so it never
+/// shifts the timeline or composer when it comes and goes.
+struct TypingIndicator: View {
+    let names: [String]
+
+    var body: some View {
+        if !names.isEmpty {
+            Text(Self.text(for: names))
+                .font(.rcCaption)
+                .foregroundStyle(Color.rcFontSecondaryInfo)
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(.regularMaterial, in: Capsule())
+                .padding(.leading, 12)
+                .padding(.bottom, 6)
+                .transition(.opacity)
+                .accessibilityAddTraits(.updatesFrequently)
+        }
+    }
+
+    static func text(for names: [String]) -> String {
+        switch names.count {
+        case 1: "\(names[0]) is typing…"
+        case 2: "\(names[0]) and \(names[1]) are typing…"
+        default: "Several people are typing…"
+        }
     }
 }
 

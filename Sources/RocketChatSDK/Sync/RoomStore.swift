@@ -20,6 +20,12 @@ actor InMemoryRoomStore: RoomStoring {
         roomsUpdated: [Room], roomsRemoved: [String],
         subscriptionsUpdated: [Subscription], subscriptionsRemoved: [String]
     ) {
+        let roomsUpdated = roomsUpdated.filter {
+            !isStale($0._updatedAt, comparedTo: roomsById[$0._id]?._updatedAt)
+        }
+        let subscriptionsUpdated = subscriptionsUpdated.filter {
+            !isStale($0._updatedAt, comparedTo: subscriptionsByRoomId[$0.rid]?._updatedAt)
+        }
         for room in roomsUpdated {
             roomsById[room._id] = room
         }
