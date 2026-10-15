@@ -66,3 +66,9 @@ public enum JSONValue: Codable, Sendable, Equatable {
         objectValue?[key]
     }
 }
+
+extension JSONValue: ExpressibleByStringLiteral {
+    public init(stringLiteral value: String) {
+        self = .string(value)
+    }
+}

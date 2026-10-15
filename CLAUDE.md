@@ -19,9 +19,14 @@ API policy (verified against server source and R&D Confluence):
   may be applied immediately, but they must converge with the next REST
   tick. Any missed event is repaired by sync. If the socket is down,
   behavior degrades to plain polling.
-- Today the socket is used only as a "something changed" bell
-  (`StreamerSignalTransport`, enabled per account). Extending it to carry
-  payloads is permitted work, not a violation.
+- The socket (`StreamerTransport`, enabled per account) carries payloads:
+  room messages/deletes/typing for open rooms, sidebar records, presence for
+  tracked users. Stream data never advances a REST high-water mark, and store
+  upserts are newer-wins on `_updatedAt`, so REST converges races.
+- The only `msg:"method"` frames allowed on the socket are the streamer's
+  own `login {resume}` (socket auth) and the `stream-notify-room`
+  `<rid>/user-activity` typing write (the server rejects other stream writes;
+  legacy `<rid>/typing` is dropped). Neither is deprecation-logged.
 
 Full plan: `~/.claude/plans/look-ate-rocket-chat-api-piped-crayon.md`
 Backlog: `BACKLOG.md`, mirrored to the app's default GitHub project:

@@ -299,24 +299,82 @@ func runSend(room nameOrId: String, text: String) async {
 func runTail(room nameOrId: String) async {
     let (client, _) = await authenticatedClient()
     await client.startSync()
-    // RC_PUSH=1 enables the push bell: instant wake-ups, polling as safety net.
-    if ProcessInfo.processInfo.environment["RC_PUSH"] == "1" {
-        await client.enablePushSignals()
-        print("(push signals enabled)")
+    // Realtime streamer by default; RC_POLL=1 tails with REST polling only.
+    let realtime = ProcessInfo.processInfo.environment["RC_POLL"] != "1"
+    if realtime {
+        await client.enableRealtime()
     }
     let room = await resolveRoom(client, nameOrId)
     do {
         let handle = try await client.openRoom(room.id)
-        print("Tailing \(room.displayName) — Ctrl-C to stop")
-        var printedIds = Set<String>()
+        print("Tailing \(room.displayName) (\(realtime ? "realtime" : "polling")) — Ctrl-C to stop")
+        Task {
+            for await typists in await handle.typingUpdates() {
+                print(typists.isEmpty
+                    ? "  (nobody typing)"
+                    : "  (\(typists.joined(separator: ", ")) typing…)")
+            }
+        }
+        // Edits re-print: key on id + update time, not id alone.
+        var printed = Set<String>()
         for await snapshot in await handle.timelineUpdates() {
-            for entry in snapshot.entries where !printedIds.contains(entry.id) {
-                printedIds.insert(entry.id)
+            for entry in snapshot.entries {
+                let key = "\(entry.id)@\(entry.message._updatedAt?.timeIntervalSince1970 ?? 0)"
+                guard printed.insert(key).inserted else { continue }
                 printMessage(entry.message)
             }
         }
     } catch {
         fail(describe(error))
+    }
+}
+
+/// Broadcasts our typing state over the streamer for a few seconds, then
+/// stops — exercises the one stream write the SDK makes.
+func runType(room nameOrId: String, seconds: Int) async {
+    let (client, _) = await authenticatedClient()
+    await client.enableRealtime()
+    let room = await resolveRoom(client, nameOrId)
+    do {
+        let handle = try await client.openRoom(room.id)
+        // Give the socket a moment to log in; writes are dropped until then.
+        try? await Task.sleep(for: .seconds(2))
+        print("typing in \(room.displayName) for \(seconds)s…")
+        for _ in 0..<seconds {
+            await handle.noteTyping()
+            try? await Task.sleep(for: .seconds(1))
+        }
+        await handle.stopTyping()
+        print("stopped")
+        try? await Task.sleep(for: .milliseconds(500))
+        await handle.close()
+    } catch {
+        fail(describe(error))
+    }
+}
+
+/// Follows users' presence (REST seed, then the presence stream).
+func runPresence(usernames: [String]) async {
+    let (client, _) = await authenticatedClient()
+    await client.enableRealtime()
+    var names: [String: String] = [:]
+    for username in usernames {
+        do {
+            let user = try await client.userInfo(username: username)
+            names[user._id] = username
+        } catch {
+            fail("\(username): \(describe(error))")
+        }
+    }
+    await client.trackPresence(userIds: Array(names.keys))
+    print("Watching presence of \(usernames.joined(separator: ", ")) — Ctrl-C to stop")
+    var last: [String: UserPresence] = [:]
+    for await map in await client.presenceUpdates() {
+        for (userId, presence) in map where last[userId] != presence {
+            let text = presence.statusText.map { " — \($0)" } ?? ""
+            print("\(names[userId] ?? userId): \(presence.status.rawValue)\(text)")
+        }
+        last = map
     }
 }
 
@@ -458,6 +516,12 @@ case "send":
 case "tail":
     guard arguments.count == 2 else { fail("usage: rc-cli tail <room>") }
     await runTail(room: arguments[1])
+case "type":
+    guard arguments.count >= 2 else { fail("usage: rc-cli type <room> [seconds]") }
+    await runType(room: arguments[1], seconds: arguments.count > 2 ? Int(arguments[2]) ?? 5 : 5)
+case "presence":
+    guard arguments.count >= 2 else { fail("usage: rc-cli presence <username...>") }
+    await runPresence(usernames: Array(arguments.dropFirst()))
 case "upload":
     guard arguments.count >= 3 else { fail("usage: rc-cli upload <room> <path> [text...]") }
     await runUpload(
@@ -495,7 +559,9 @@ default:
       rc-cli rooms                             List joined rooms with unread state
       rc-cli history <room> [count]            Show recent messages (default 20)
       rc-cli send <room> <text...>             Send a message
-      rc-cli tail <room>                       Follow a room live (delta polling)
+      rc-cli tail <room>                       Follow a room live (streamer; RC_POLL=1 polls)
+      rc-cli type <room> [seconds]             Broadcast typing for a while (default 5)
+      rc-cli presence <username...>            Follow users' online status live
       rc-cli threads <room>                    List threads in a room
       rc-cli search <room> <text...>           Search messages in a room
       rc-cli spotlight <query...>              Global user/channel search

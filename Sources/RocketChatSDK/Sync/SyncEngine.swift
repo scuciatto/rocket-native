@@ -1,7 +1,8 @@
 import Foundation
 
 /// The live-update mechanism and source of truth: tiered adaptive polling of
-/// the REST delta endpoints. Push signals only accelerate it.
+/// the REST delta endpoints. The realtime streamer accelerates it: its
+/// payloads are applied immediately, and the next REST tick converges them.
 ///
 /// - Sidebar tier: `subscriptions.get` + `rooms.get` with `updatedSince`
 ///   (2 requests/tick) keeps unread counts and previews fresh workspace-wide.
@@ -10,7 +11,9 @@ import Foundation
 ///
 /// High-water marks come from server record timestamps (`_updatedAt`), never
 /// the client clock, so ticks are also the recovery path after sleep or
-/// network loss — no special reconnect logic exists or is needed.
+/// network loss — no special reconnect logic exists or is needed. Stream
+/// payloads never move a high-water mark, so a dropped event is always
+/// re-covered by REST.
 actor SyncEngine {
     struct Config: Sendable {
         var sidebarActiveInterval: TimeInterval = 15
@@ -22,6 +25,10 @@ actor SyncEngine {
         /// Deepest a jump-to-message may grow the window (matches the
         /// in-memory store's hard limit, past which prepends are dropped).
         var jumpWindowLimit: Int = 1000
+        /// Our typing broadcast repeats at most this often while typing…
+        var typingResendInterval: TimeInterval = 3
+        /// …and sends "stopped" after this long without input.
+        var typingIdleTimeout: TimeInterval = 5
     }
 
     private let rest: RESTClient
@@ -41,14 +48,31 @@ actor SyncEngine {
     private var subscriptionsHighWater: Date?
     private var roomHighWater: [String: Date] = [:]
     private var threadHighWater: [String: Date] = [:]
-    /// Open thread → its room, for routing room-level push signals.
+    /// Open thread → its room, for routing room-level realtime events.
     private var threadRooms: [String: String] = [:]
 
-    private var pushTask: Task<Void, Never>?
-    private var pushTransport: PushSignaling?
-    /// While the push transport is healthy, polls stretch to a safety net —
-    /// signals do the waking, ticks stay REST.
-    private(set) var pushHealthy = false
+    private var realtimeTask: Task<Void, Never>?
+    private var realtime: RealtimeTransport?
+    /// While the realtime transport is healthy, polls stretch to a safety
+    /// net — the stream does the live work, ticks keep converging.
+    private(set) var realtimeHealthy = false
+    /// Open rooms whose message stream is ready; they need no REST tick per
+    /// activity bell.
+    private(set) var liveRooms: Set<String> = []
+
+    let typing: TypingTracker
+    let presence = PresenceStore()
+    private var trackedPresence: Set<String> = []
+
+    /// Our own typing broadcast, per room/thread.
+    private struct TypingSend {
+        var lastSent: Date?
+        var idleTask: Task<Void, Never>?
+    }
+    private var typingSends: [TypingTracker.Key: TypingSend] = [:]
+    /// Server's `UI_Use_Real_Name`, read once: typing must be broadcast
+    /// under the name the server checks against.
+    private var useRealName: Bool?
 
     /// Thread windows live in the message store under a reserved key so they
     /// never collide with room ids.
@@ -74,6 +98,7 @@ actor SyncEngine {
         self.roomStore = roomStore
         self.messageStore = messageStore
         self.markStore = markStore
+        self.typing = TypingTracker(clock: clock)
     }
 
     // MARK: - Lifecycle
@@ -90,53 +115,137 @@ actor SyncEngine {
                 try? await self.clock.sleep(seconds: interval)
                 if Task.isCancelled { return }
                 await self.tickSidebar()
+                // Without the stream, presence degrades to polling too.
+                if await !self.realtimeHealthy {
+                    await self.refreshPresence()
+                }
             }
         }
     }
 
-    // MARK: - Push signals
+    // MARK: - Realtime
 
-    /// Attaches a push transport. Purely advisory: signals trigger the same
-    /// REST ticks the poller runs; polling continues as a safety net.
-    func attachPushSignals(_ transport: PushSignaling) {
-        detachPushSignals()
-        pushTransport = transport
-        pushTask = Task { [weak self] in
-            guard let transport = await self?.pushTransport else { return }
-            for await signal in await transport.signals() {
+    /// Attaches the realtime transport: watches every open room and tracked
+    /// user, then applies its events. Polling continues as a safety net.
+    func attachRealtime(_ transport: RealtimeTransport) async {
+        detachRealtime()
+        realtime = transport
+        for roomId in roomHighWater.keys {
+            await transport.watchRoom(roomId)
+        }
+        if !trackedPresence.isEmpty {
+            await transport.watchPresence(added: Array(trackedPresence), removed: [])
+        }
+        realtimeTask = Task { [weak self] in
+            for await event in await transport.events() {
                 guard let self else { return }
-                await self.handle(signal)
+                await self.handle(event)
             }
-            await self?.setPushHealthy(false)
+            await self?.realtimeStopped()
         }
     }
 
-    func detachPushSignals() {
-        pushTask?.cancel()
-        pushTask = nil
-        let transport = pushTransport
-        pushTransport = nil
-        pushHealthy = false
+    func detachRealtime() {
+        realtimeTask?.cancel()
+        realtimeTask = nil
+        let transport = realtime
+        realtime = nil
+        realtimeStopped()
         Task { await transport?.stop() }
     }
 
-    private func handle(_ signal: PushSignal) async {
-        switch signal {
+    private func realtimeStopped() {
+        realtimeHealthy = false
+        liveRooms = []
+        for send in typingSends.values {
+            send.idleTask?.cancel()
+        }
+        typingSends = [:]
+        let typing = typing
+        Task { await typing.clearAll() }
+    }
+
+    func handle(_ event: RealtimeEvent) async {
+        switch event {
         case .connected(let healthy):
-            let cameUp = healthy && !pushHealthy
-            pushHealthy = healthy
+            let cameUp = healthy && !realtimeHealthy
+            realtimeHealthy = healthy
+            if !healthy {
+                // No stops will arrive for this session's typists.
+                liveRooms = []
+                await typing.clearAll()
+            }
             if cameUp {
-                // Catch up on anything missed while the bell was down.
+                // Catch up on anything missed while the socket was down.
                 await tickSidebar()
-                for roomId in roomTasks.keys {
+                for roomId in roomHighWater.keys {
                     await tickRoom(roomId)
                 }
+                for threadId in threadHighWater.keys {
+                    await tickThread(threadId)
+                }
+                await refreshPresence()
             }
+
+        case .message(let roomId, let message):
+            if roomHighWater[roomId] != nil {
+                await messageStore.apply(
+                    delta: MessageDelta(updated: [message], deleted: []), in: roomId)
+            }
+            if let threadId = message.tmid, threadHighWater[threadId] != nil {
+                await messageStore.apply(
+                    delta: MessageDelta(updated: [message], deleted: []),
+                    in: Self.threadKey(threadId))
+            }
+
+        case .messageDeleted(let roomId, let messageId):
+            let delta = MessageDelta(updated: [], deleted: [DeletedMessage(_id: messageId)])
+            if roomHighWater[roomId] != nil {
+                await messageStore.apply(delta: delta, in: roomId)
+            }
+            for (threadId, threadRoom) in threadRooms where threadRoom == roomId {
+                await messageStore.apply(delta: delta, in: Self.threadKey(threadId))
+            }
+
+        case .roomLive(let roomId, let live):
+            if live, roomHighWater[roomId] != nil {
+                liveRooms.insert(roomId)
+            } else {
+                liveRooms.remove(roomId)
+            }
+
+        case .typing(let roomId, let threadId, let name, let active):
+            let me = await selfUser()
+            guard name != me.username, name != me.name else { return }
+            await typing.apply(roomId: roomId, threadId: threadId, name: name, active: active)
+
+        case .presence(let update):
+            await presence.apply([update])
+
+        case .subscriptionChanged(let subscription):
+            await roomStore.apply(
+                roomsUpdated: [], roomsRemoved: [],
+                subscriptionsUpdated: [subscription], subscriptionsRemoved: [])
+        case .subscriptionRemoved(let roomId):
+            await roomStore.apply(
+                roomsUpdated: [], roomsRemoved: [],
+                subscriptionsUpdated: [], subscriptionsRemoved: [roomId])
+        case .roomChanged(let room):
+            await roomStore.apply(
+                roomsUpdated: [room], roomsRemoved: [],
+                subscriptionsUpdated: [], subscriptionsRemoved: [])
+        case .roomRemoved(let roomId):
+            await roomStore.apply(
+                roomsUpdated: [], roomsRemoved: [roomId],
+                subscriptionsUpdated: [], subscriptionsRemoved: [])
+
         case .sidebarChanged:
             await tickSidebar()
         case .roomActivity(let roomId):
+            // Live rooms already got the payload; the rest fall back to REST.
             // "Open" = has an initial-load high-water mark (poll task
             // existence would miss rooms opened without polling).
+            guard !liveRooms.contains(roomId) else { return }
             if roomHighWater[roomId] != nil {
                 await tickRoom(roomId)
             }
@@ -146,12 +255,104 @@ actor SyncEngine {
         }
     }
 
-    private func setPushHealthy(_ healthy: Bool) {
-        pushHealthy = healthy
+    // MARK: - Typing (outgoing)
+
+    /// Call on composer input. Broadcasts "typing" at most every
+    /// `typingResendInterval` and "stopped" after `typingIdleTimeout`
+    /// without input. No-op without a realtime transport.
+    func noteTyping(roomId: String, threadId: String?) async {
+        guard let realtime else { return }
+        let key = TypingTracker.Key(roomId: roomId, threadId: threadId)
+        var send = typingSends[key] ?? TypingSend()
+        let now = clock.now
+        let due = send.lastSent.map {
+            now.timeIntervalSince($0) >= config.typingResendInterval
+        } ?? true
+        if due {
+            send.lastSent = now
+        }
+        send.idleTask?.cancel()
+        send.idleTask = Task { [weak self, clock, config] in
+            try? await clock.sleep(seconds: config.typingIdleTimeout)
+            guard !Task.isCancelled else { return }
+            await self?.stopTyping(roomId: roomId, threadId: threadId)
+        }
+        typingSends[key] = send
+        if due {
+            let name = await typingName()
+            await realtime.sendTyping(
+                roomId: roomId, threadId: threadId, name: name, active: true)
+        }
+    }
+
+    /// Broadcasts "stopped" if we were typing (send, cleared draft, close).
+    func stopTyping(roomId: String, threadId: String?) async {
+        let key = TypingTracker.Key(roomId: roomId, threadId: threadId)
+        guard let send = typingSends.removeValue(forKey: key) else { return }
+        send.idleTask?.cancel()
+        guard send.lastSent != nil, let realtime else { return }
+        let name = await typingName()
+        await realtime.sendTyping(
+            roomId: roomId, threadId: threadId, name: name, active: false)
+    }
+
+    private func typingName() async -> String {
+        if useRealName == nil,
+           let response = try? await rest.send(
+               API.Settings.publicValues(ids: ["UI_Use_Real_Name"])) {
+            useRealName = response.settings
+                .first { $0._id == "UI_Use_Real_Name" }?.value == .bool(true)
+        }
+        let me = await selfUser()
+        return (useRealName == true ? me.name : nil) ?? me.username ?? me._id
+    }
+
+    /// Our username/name. A session adopted from a bare token (PAT) has no
+    /// profile yet; load it once, since typing is broadcast — and our own
+    /// echoes filtered — by name.
+    private func selfUser() async -> MiniUser {
+        let me = await auth.miniUser
+        guard me.username == nil,
+              let profile = try? await rest.send(API.Auth.me()) else { return me }
+        await auth.setProfile(profile)
+        return await auth.miniUser
+    }
+
+    // MARK: - Presence
+
+    /// Starts tracking users' presence: REST seed for new ids, then live
+    /// stream updates. Tracking is additive for the session.
+    func trackPresence(_ userIds: [String]) async {
+        let added = Set(userIds).subtracting(trackedPresence)
+        guard !added.isEmpty else { return }
+        trackedPresence.formUnion(added)
+        await seedPresence(Array(added))
+        await realtime?.watchPresence(added: Array(added), removed: [])
+    }
+
+    /// Re-reads every tracked user over REST — the presence recovery path.
+    func refreshPresence() async {
+        guard !trackedPresence.isEmpty else { return }
+        await seedPresence(Array(trackedPresence))
+    }
+
+    private func seedPresence(_ userIds: [String]) async {
+        let sorted = userIds.sorted()
+        // Chunked to keep the `ids` query string a sane length.
+        for start in stride(from: 0, to: sorted.count, by: 100) {
+            let chunk = Array(sorted[start..<min(start + 100, sorted.count)])
+            guard let response = try? await rest.send(API.Users.presence(ids: chunk))
+            else { continue }
+            await presence.apply(response.users.map {
+                UserPresence(
+                    userId: $0._id, username: $0.username,
+                    status: $0.status ?? .unknown, statusText: $0.statusText)
+            })
+        }
     }
 
     func stop() {
-        detachPushSignals()
+        detachRealtime()
         sidebarTask?.cancel()
         sidebarTask = nil
         for task in roomTasks.values {
@@ -175,6 +376,7 @@ actor SyncEngine {
             for roomId in roomTasks.keys {
                 await tickRoom(roomId)
             }
+            await refreshPresence()
         }
     }
 
@@ -227,6 +429,7 @@ actor SyncEngine {
     func openRoom(_ roomId: String, startPolling: Bool = true) async throws {
         guard roomTasks[roomId] == nil else { return }
         try await initialLoad(roomId)
+        await realtime?.watchRoom(roomId)
         guard startPolling else { return }
         roomTasks[roomId] = Task { [weak self] in
             while !Task.isCancelled {
@@ -243,6 +446,10 @@ actor SyncEngine {
         roomTasks[roomId]?.cancel()
         roomTasks[roomId] = nil
         roomHighWater[roomId] = nil
+        liveRooms.remove(roomId)
+        await realtime?.unwatchRoom(roomId)
+        await stopTyping(roomId: roomId, threadId: nil)
+        await typing.clear(roomId: roomId)
         await messageStore.trim(roomId, to: config.closedRoomWindowLimit)
     }
 
@@ -344,7 +551,9 @@ actor SyncEngine {
         threadTasks[threadId]?.cancel()
         threadTasks[threadId] = nil
         threadHighWater[threadId] = nil
-        threadRooms[threadId] = nil
+        if let roomId = threadRooms.removeValue(forKey: threadId) {
+            await stopTyping(roomId: roomId, threadId: threadId)
+        }
         await messageStore.trim(Self.threadKey(threadId), to: 0)
     }
 
@@ -383,17 +592,21 @@ actor SyncEngine {
         // the room window.
         let windowKey = threadId.map(Self.threadKey) ?? roomId
         await messageStore.insertPending(optimistic, in: windowKey)
+        await stopTyping(roomId: roomId, threadId: threadId)
         do {
             let sent = try await rest.send(API.Chat.sendMessage(
                 roomId: roomId, text: text, messageId: messageId, threadId: threadId))
             await messageStore.confirm(
                 messageId: messageId, with: sent.message, in: windowKey)
             // A message of ours means an active conversation; catch up now
-            // rather than waiting out the poll interval.
-            if let threadId {
-                await tickThread(threadId)
-            } else {
-                await tickRoom(roomId)
+            // rather than waiting out the poll interval (a live room gets
+            // everything from the stream already).
+            if !liveRooms.contains(roomId) {
+                if let threadId {
+                    await tickThread(threadId)
+                } else {
+                    await tickRoom(roomId)
+                }
             }
         } catch {
             await messageStore.markFailed(messageId: messageId, in: windowKey)
@@ -445,12 +658,12 @@ actor SyncEngine {
     // MARK: - Helpers
 
     private var sidebarInterval: TimeInterval {
-        pushHealthy ? config.sidebarIdleInterval
+        realtimeHealthy ? config.sidebarIdleInterval
             : appActive ? config.sidebarActiveInterval : config.sidebarIdleInterval
     }
 
     private var roomInterval: TimeInterval {
-        pushHealthy ? config.roomIdleInterval
+        realtimeHealthy ? config.roomIdleInterval
             : appActive ? config.roomActiveInterval : config.roomIdleInterval
     }
 

@@ -4,8 +4,8 @@ import Foundation
 ///
 /// Instance-based by design: create one client per server/workspace.
 /// Requests go through REST only (DDP methods are deprecated). Live updates
-/// come from an adaptive delta-sync poller, optionally accelerated by the
-/// realtime streamer (`enablePushSignals()`).
+/// come from an adaptive delta-sync poller, accelerated by the realtime
+/// streamer (`enableRealtime()`): instant messages, typing and presence.
 /// Where the SDK keeps rooms, messages, and sync marks.
 public enum CacheStorage: Sendable {
     /// No persistence; everything re-syncs on launch (v1 default).
@@ -99,20 +99,36 @@ public final class RocketChatClient: Sendable {
         await engine.setAppActive(active)
     }
 
-    /// Opt-in push bell: uses the realtime streamer WebSocket as a
-    /// "something changed" signal — every payload still flows through REST
-    /// delta sync, and polling continues as a safety net. If the socket
-    /// can't connect, behavior degrades silently to plain polling.
-    public func enablePushSignals() async {
+    /// Connects the realtime streamer WebSocket: open rooms get messages,
+    /// deletions and typing live, the sidebar gets subscription/room
+    /// records, tracked users get presence. Payloads apply immediately; REST
+    /// delta sync keeps running (stretched to a safety net) and converges
+    /// anything the socket misses. If the socket can't connect, behavior
+    /// degrades silently to plain polling.
+    public func enableRealtime() async {
         let auth = self.auth
-        let transport = StreamerSignalTransport(
+        let transport = StreamerTransport(
             serverURL: serverURL,
             credentials: { await auth.credentials })
-        await engine.attachPushSignals(transport)
+        await engine.attachRealtime(transport)
     }
 
-    public func disablePushSignals() async {
-        await engine.detachPushSignals()
+    public func disableRealtime() async {
+        await engine.detachRealtime()
+    }
+
+    // MARK: - Presence
+
+    /// Starts tracking users' online status: a REST seed, then live stream
+    /// updates (re-seeded after reconnects; polled while the socket is down).
+    /// Additive — already-tracked ids are skipped.
+    public func trackPresence(userIds: [String]) async {
+        await engine.trackPresence(userIds)
+    }
+
+    /// Presence snapshots keyed by user id: current map first, then on change.
+    public func presenceUpdates() async -> AsyncStream<[String: UserPresence]> {
+        await engine.presence.updates()
     }
 
     /// Sidebar snapshots: yields current state immediately, then on change.

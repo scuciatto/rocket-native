@@ -58,6 +58,9 @@ struct ThreadPanel: View {
                 .padding(.bottom, 8)
             }
             .defaultScrollAnchor(.bottom)
+            .overlay(alignment: .bottomLeading) {
+                TypingIndicator(names: model.typists)
+            }
 
             Divider()
             if let editing = editingMessage {
@@ -97,6 +100,10 @@ struct ThreadPanel: View {
             guard let client = session.client else { return }
             await model.open(threadId: parent._id, roomId: roomId, client: client)
         }
+        .onChange(of: draft) { _, text in
+            guard editingMessage == nil else { return }
+            model.draftChanged(text)
+        }
         .onDisappear {
             model.close()
         }
@@ -107,14 +114,22 @@ struct ThreadPanel: View {
 @Observable
 final class ThreadModel {
     private(set) var entries: [TimelineEntry] = []
+    /// Who's typing in this thread.
+    private(set) var typists: [String] = []
 
     private var handle: ThreadHandle?
     private var observation: Task<Void, Never>?
+    private var typingObservation: Task<Void, Never>?
 
     func open(threadId: String, roomId: String, client: RocketChatClient) async {
         close()
         guard let handle = try? await client.openThread(threadId, in: roomId) else { return }
         self.handle = handle
+        typingObservation = Task {
+            for await names in await handle.typingUpdates() {
+                self.typists = names
+            }
+        }
         observation = Task {
             for await snapshot in await handle.timelineUpdates() {
                 self.entries = snapshot.entries
@@ -139,9 +154,24 @@ final class ThreadModel {
         try? await handle?.delete(messageId: messageId)
     }
 
+    func draftChanged(_ text: String) {
+        guard let handle else { return }
+        let hasText = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        Task {
+            if hasText {
+                await handle.noteTyping()
+            } else {
+                await handle.stopTyping()
+            }
+        }
+    }
+
     func close() {
         observation?.cancel()
         observation = nil
+        typingObservation?.cancel()
+        typingObservation = nil
+        typists = []
         let handle = handle
         Task { await handle?.close() }
         self.handle = nil
