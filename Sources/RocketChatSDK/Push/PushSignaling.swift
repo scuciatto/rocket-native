@@ -18,10 +18,8 @@ public enum PushSignal: Sendable, Equatable {
 /// the transport is healthy), so a broken transport degrades silently to the
 /// plain polling behavior.
 ///
-/// Implementations today: `StreamerSignalTransport` (opt-in; uses the legacy
-/// realtime WebSocket purely as a change bell). When Rocket.Chat ships the
-/// streamer's REST-era replacement, it becomes another implementation of
-/// this protocol and the streamer one gets deleted.
+/// Implementations today: `StreamerSignalTransport` (opt-in; uses the
+/// realtime streamer WebSocket as a change bell).
 public protocol PushSignaling: Sendable {
     /// Starts the transport and returns its signal stream. The stream
     /// finishing means the transport stopped (engine reverts to polling).

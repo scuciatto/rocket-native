@@ -5,8 +5,8 @@ import RocketChatSDK
 /// Local notifications + Dock badge across all signed-in workspaces, driven
 /// entirely by each account's sidebar poll: room-list snapshots are diffed
 /// against the previous one, so a grown unread/mention count with a fresh
-/// last message becomes a banner. This is the REST-only design — there is no
-/// push channel to subscribe to.
+/// last message becomes a banner. Banners don't consume streamer payloads
+/// (yet). The bell only makes the sidebar poll run sooner.
 @MainActor
 @Observable
 final class NotificationManager {

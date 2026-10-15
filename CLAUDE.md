@@ -1,13 +1,27 @@
 # Rocket.Chat Native macOS Client
 
 Native macOS Rocket.Chat client: a zero-dependency Swift SDK (`RocketChatSDK`)
-plus a SwiftUI app. **REST-only by explicit decision** — the realtime/DDP
-streamer API is deprecated and must not carry data. Live updates come from
-delta-sync polling (`chat.syncMessages`, `subscriptions.get?updatedSince=`).
-One sanctioned exception: `StreamerSignalTransport` (opt-in via
-`enablePushSignals()`) uses the streamer WebSocket purely as a "something
-changed" bell that triggers REST ticks — no payloads are decoded from it,
-and it is the single file to delete when the REST-era replacement ships.
+plus a SwiftUI app.
+
+API policy (verified against server source and R&D Confluence):
+- **Requests and actions: REST only** (`/api/v1`). DDP *methods* are
+  deprecated and are being removed in 9.0.0 (server `methodDeprecationLogger`,
+  ARCH-2166). Never call a DDP method, including through the
+  `method.call/:method` REST bridge.
+- **Realtime: the DDP streamer is allowed** for subscriptions (`/websocket`:
+  `stream-room-messages`, `stream-notify-room|user|logged`,
+  `stream-user-presence`), including stream writes such as typing. The
+  streamer is *not* deprecated: it is an SLO-tracked core service and new
+  features (presence sync) ship on it. Use it for a better experience:
+  instant messages, typing, live presence, read receipts.
+- **REST delta sync stays the source of truth and the recovery path**
+  (`chat.syncMessages`, `subscriptions.get?updatedSince=`). Stream events
+  may be applied immediately, but they must converge with the next REST
+  tick. Any missed event is repaired by sync. If the socket is down,
+  behavior degrades to plain polling.
+- Today the socket is used only as a "something changed" bell
+  (`StreamerSignalTransport`, enabled per account). Extending it to carry
+  payloads is permitted work, not a violation.
 
 Full plan: `~/.claude/plans/look-ate-rocket-chat-api-piped-crayon.md`
 Backlog: `BACKLOG.md`, mirrored to the app's default GitHub project:
