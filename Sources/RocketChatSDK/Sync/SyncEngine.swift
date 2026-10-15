@@ -1,7 +1,7 @@
 import Foundation
 
-/// The live-update mechanism of this REST-only SDK: tiered adaptive polling
-/// of the delta endpoints.
+/// The live-update mechanism and source of truth: tiered adaptive polling of
+/// the REST delta endpoints. Push signals only accelerate it.
 ///
 /// - Sidebar tier: `subscriptions.get` + `rooms.get` with `updatedSince`
 ///   (2 requests/tick) keeps unread counts and previews fresh workspace-wide.

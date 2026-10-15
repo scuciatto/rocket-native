@@ -8,8 +8,11 @@ two deliverables:
 
 ## Design
 
-**REST-only.** The realtime (DDP/streamer) WebSocket API is deprecated, so the
-SDK never touches it. Live updates come from *delta-sync polling* against
+**REST for requests, streamer for realtime.** Every request and action uses
+the REST API (`/api/v1`). Rocket.Chat is migrating DDP *methods* to REST and
+removes them in 9.0, so the SDK never calls them. The realtime DDP *streamer*
+(WebSocket subscriptions) is not deprecated. The SDK may use it to speed up
+live updates, but the source of truth is *delta-sync polling* against
 first-class REST endpoints:
 
 | Tier | Endpoints | Cadence |
@@ -23,17 +26,18 @@ sleep or network loss is also the recovery path — there is no separate
 reconnect logic. The poller honors `x-ratelimit-*` headers and backs off on
 429s.
 
-**Known v1 limitations** (consequences of REST-only): there are no typing
-indicators (streamer-only feature today).
+**Known v1 limitations:** there are no typing indicators yet. These, live
+presence and live read receipts exist only on the streamer and are planned on
+top of it.
 
-**Push signals (opt-in).** `client.enablePushSignals()` attaches a *bell*:
-the legacy realtime WebSocket subscribed to the two user-level notify streams
-and reduced to "something changed" hints — it never carries message data, and
-every payload still flows through REST delta sync. Signals trigger immediate
-ticks (sub-second updates); polling continues at the idle cadence as a safety
-net, so a failed socket degrades silently to plain polling. When Rocket.Chat
-ships the streamer's REST-era replacement, it becomes another `PushSignaling`
-implementation and `StreamerSignalTransport` gets deleted.
+**Push signals.** `client.enablePushSignals()` attaches a *bell*, and the app
+enables it for every account. It is the realtime WebSocket subscribed to the
+two user-level notify streams, and today it reduces every event to a
+"something changed" hint. Message data still flows through REST delta sync.
+Signals trigger immediate ticks (sub-second updates). Polling continues at the
+idle cadence as a safety net, so a failed socket degrades silently to plain
+polling. Carrying stream payloads (messages, typing, presence) is allowed; any
+of that must still converge with the next REST tick.
 
 **Offline cache.** Stores are backed by SQLite (system `libsqlite3`, still
 zero third-party dependencies) when the client is created with

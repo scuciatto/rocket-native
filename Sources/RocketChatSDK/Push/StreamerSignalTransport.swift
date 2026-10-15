@@ -12,14 +12,14 @@ protocol SignalSocketFactory: Sendable {
     func makeSocket(url: URL) -> SignalSocket
 }
 
-/// Opt-in push bell over the legacy realtime WebSocket.
+/// Opt-in push bell over the realtime streamer WebSocket.
 ///
-/// IMPORTANT SCOPE: this transport never decodes message payloads and no
-/// data from it reaches the stores. It subscribes to the two user-level
-/// notify streams and reduces every event to a `PushSignal` routing hint;
-/// the sync engine then runs its normal REST delta ticks. The deprecated
-/// streamer therefore carries zero application data and this file is the
-/// only thing to delete when Rocket.Chat ships its replacement.
+/// Current scope: this transport doesn't decode message payloads, and no data
+/// from it reaches the stores. It subscribes to the two user-level notify
+/// streams and reduces every event to a `PushSignal` routing hint. The sync
+/// engine then runs its normal REST delta ticks. Carrying payloads (messages,
+/// typing, presence) is permitted by the project's API policy, as long as
+/// REST sync stays the source of truth.
 actor StreamerSignalTransport: PushSignaling {
     private let websocketURL: URL
     private let credentials: @Sendable () async -> AuthCredentials?

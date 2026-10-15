@@ -109,5 +109,6 @@ Roughly ordered by expected value.
 ## Known v1 limitations (accepted, documented in README)
 
 - Update latency: ~2–3 s active room, ~15–30 s sidebar (polling).
-- No typing indicators (streamer-only feature today).
+- No typing indicators yet (streamer-only feature; the streamer is now
+  permitted, see CLAUDE.md API policy).
 - No offline mode until item 1 lands.

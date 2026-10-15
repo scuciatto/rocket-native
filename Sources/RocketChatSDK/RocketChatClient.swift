@@ -3,8 +3,9 @@ import Foundation
 /// Entry point for a single Rocket.Chat server connection.
 ///
 /// Instance-based by design: create one client per server/workspace.
-/// The SDK is REST-only — live updates are delivered by an adaptive
-/// delta-sync poller, not the deprecated realtime (DDP) API.
+/// Requests go through REST only (DDP methods are deprecated). Live updates
+/// come from an adaptive delta-sync poller, optionally accelerated by the
+/// realtime streamer (`enablePushSignals()`).
 /// Where the SDK keeps rooms, messages, and sync marks.
 public enum CacheStorage: Sendable {
     /// No persistence; everything re-syncs on launch (v1 default).
@@ -98,7 +99,7 @@ public final class RocketChatClient: Sendable {
         await engine.setAppActive(active)
     }
 
-    /// Opt-in push bell: uses the legacy realtime WebSocket **only** as a
+    /// Opt-in push bell: uses the realtime streamer WebSocket as a
     /// "something changed" signal — every payload still flows through REST
     /// delta sync, and polling continues as a safety net. If the socket
     /// can't connect, behavior degrades silently to plain polling.
