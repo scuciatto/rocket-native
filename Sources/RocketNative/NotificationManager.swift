@@ -3,10 +3,10 @@ import UserNotifications
 import RocketChatSDK
 
 /// Local notifications + Dock badge across all signed-in workspaces, driven
-/// entirely by each account's sidebar poll: room-list snapshots are diffed
-/// against the previous one, so a grown unread/mention count with a fresh
-/// last message becomes a banner. Banners don't consume streamer payloads
-/// (yet). The bell only makes the sidebar poll run sooner.
+/// by each account's room-list snapshots (REST sidebar ticks and realtime
+/// sidebar records alike). `NotificationPlanner` turns a grown
+/// unread/mention count with a fresh last message into a banner, however
+/// the two facts are split across snapshots.
 @MainActor
 @Observable
 final class NotificationManager {
@@ -43,25 +43,15 @@ final class NotificationManager {
         UNUserNotificationCenter.current().requestAuthorization(
             options: [.alert, .sound]) { _, _ in }
         tasks[accountId] = Task { [weak self] in
-            var previous: [String: RoomSummary] = [:]
-            var isFirstSnapshot = true
+            var planner = NotificationPlanner()
             for await rooms in await client.roomListUpdates() {
                 guard let self else { return }
                 self.roomsByAccount[accountId] = rooms
                 self.updateDockBadge()
-                let before = previous
-                previous = Dictionary(uniqueKeysWithValues: rooms.map { ($0.id, $0) })
-                // The first snapshot is baseline state, not news.
-                if isFirstSnapshot {
-                    isFirstSnapshot = false
-                    continue
-                }
                 let visibleRoomId = (self.appActive && self.activeAccountId == accountId)
                     ? self.activeRoomId : nil
-                let events = Self.plan(
-                    previous: before, current: rooms,
-                    suppressedRoomId: visibleRoomId,
-                    selfUserId: selfUserId)
+                let events = planner.ingest(
+                    rooms, suppressedRoomId: visibleRoomId, selfUserId: selfUserId)
                 for event in events {
                     self.post(event, accountId: accountId)
                 }
@@ -99,46 +89,7 @@ final class NotificationManager {
             hasUnread: rooms.contains { $0.unread > 0 || $0.alert })
     }
 
-    // MARK: - Planning (pure, kept separate for testability)
-
-    struct Event {
-        var roomId: String
-        var title: String
-        var subtitle: String?
-        var body: String
-        var sound: Bool
-    }
-
-    /// Decides which rooms deserve a banner given two consecutive snapshots.
-    /// `suppressedRoomId` is the room currently on screen, when its account
-    /// is the visible one and the app is frontmost.
-    static func plan(
-        previous: [String: RoomSummary], current: [RoomSummary],
-        suppressedRoomId: String?, selfUserId: String?
-    ) -> [Event] {
-        current.compactMap { room in
-            guard let last = room.lastMessage else { return nil }
-            let before = previous[room.id]
-            let unreadGrew = room.unread > (before?.unread ?? 0)
-            let mentionsGrew = room.mentions > (before?.mentions ?? 0)
-            guard unreadGrew || mentionsGrew else { return nil }
-            // Only notify for an actual new message, not read-state churn.
-            guard last.id != before?.lastMessage?.id else { return nil }
-            // Never for own messages, and not for the room on screen.
-            guard last.u._id != selfUserId else { return nil }
-            guard room.id != suppressedRoomId else { return nil }
-
-            let sender = last.u.name ?? last.u.username ?? "Someone"
-            let text = last.msg.isEmpty ? "Sent an attachment" : String(EmojiMap.replacingShortcodes(in: last.msg).prefix(140))
-            let isDirect = room.type == .directMessage
-            return Event(
-                roomId: room.id,
-                title: isDirect ? sender : room.displayName,
-                subtitle: isDirect ? nil : sender,
-                body: text,
-                sound: isDirect || mentionsGrew)
-        }
-    }
+    // MARK: - Dock badge (pure, kept separate for testability)
 
     /// Dock badge across all workspaces: things that need *you* (mentions +
     /// DM unreads) as a number; a dot when only channel chatter is unread.
@@ -164,7 +115,7 @@ final class NotificationManager {
             accountRooms: Array(roomsByAccount.values))
     }
 
-    private func post(_ event: Event, accountId: String) {
+    private func post(_ event: NotificationPlanner.Event, accountId: String) {
         let content = UNMutableNotificationContent()
         content.title = event.title
         if let subtitle = event.subtitle {
